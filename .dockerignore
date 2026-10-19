@@ -1,0 +1,6 @@
+.git
+_bin
+coverage.*
+*.out
+helm
+mocks

@@ -1,0 +1,48 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    # Enabled by default: errcheck, govet, ineffassign, staticcheck, unused
+
+    # Additional useful linters
+    - misspell
+    - gosec
+    - gocritic
+    - bodyclose
+    - errorlint
+    - nilerr
+    - errname
+
+  settings:
+    misspell:
+      locale: US
+
+    gosec:
+      excludes:
+        - G404
+
+    errcheck:
+      check-type-assertions: true
+
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+  settings:
+    gofmt:
+      simplify: true
+
+    goimports:
+      local-prefixes:
+        - curfew
