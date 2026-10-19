@@ -1,0 +1,268 @@
+// Package that contains the core of the controller
+package curfew
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+
+	"curfew/internal/helpers"
+	"curfew/internal/logs"
+	"curfew/internal/values"
+
+	"github.com/go-logr/logr"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv1 "k8s.io/api/autoscaling/v1"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+)
+
+// Run starts the controllers for Deployments and StatefulSets and blocks until SIGINT/SIGTERM.
+func Run() error {
+	ctrl.SetLogger(logr.FromSlogHandler(logs.Logger.Handler()))
+
+	namespace := os.Getenv("POD_NAMESPACE")
+	if namespace == "" {
+		return errors.New("POD_NAMESPACE is not set")
+	}
+
+	config, err := ctrl.GetConfig()
+	if err != nil {
+		return err
+	}
+
+	opts := ctrl.Options{
+		HealthProbeBindAddress:        ":9090",
+		Metrics:                       metricsserver.Options{BindAddress: "0"},
+		LeaderElection:                true,
+		LeaderElectionID:              "curfew-leader",
+		LeaderElectionNamespace:       namespace,
+		LeaderElectionReleaseOnCancel: true,
+	}
+	// Only watch these namespaces; RBAC then grants access there only (Helm value watchNamespaces).
+	if watch := watchNamespaces(os.Getenv("WATCH_NAMESPACES")); watch != nil {
+		opts.Cache.DefaultNamespaces = watch
+	}
+
+	mgr, err := ctrl.NewManager(config, opts)
+	if err != nil {
+		return err
+	}
+
+	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
+		return err
+	}
+	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
+		return err
+	}
+
+	for kind, newObj := range map[string]func() client.Object{
+		"Deployment":  func() client.Object { return &appsv1.Deployment{} },
+		"StatefulSet": func() client.Object { return &appsv1.StatefulSet{} },
+	} {
+		r := &reconciler{
+			client:    mgr.GetClient(),
+			reader:    mgr.GetAPIReader(),
+			namespace: namespace,
+			kind:      kind,
+			newObj:    newObj,
+			now:       time.Now,
+		}
+		err := ctrl.NewControllerManagedBy(mgr).
+			For(newObj(), builder.WithPredicates(
+				watched,
+				predicate.Or(predicate.GenerationChangedPredicate{}, predicate.AnnotationChangedPredicate{}),
+			)).
+			Complete(r)
+		if err != nil {
+			return err
+		}
+	}
+
+	return mgr.Start(ctrl.SetupSignalHandler())
+}
+
+// watchNamespaces parses a comma-separated list; nil means the whole cluster.
+func watchNamespaces(list string) map[string]cache.Config {
+	var watch map[string]cache.Config
+	for ns := range strings.SplitSeq(list, ",") {
+		if ns = strings.TrimSpace(ns); ns != "" {
+			if watch == nil {
+				watch = map[string]cache.Config{}
+			}
+			watch[ns] = cache.Config{}
+		}
+	}
+	return watch
+}
+
+var tracer = otel.Tracer("curfew/internal/curfew")
+
+// watched also passes updates that remove the annotations, so a sleeping workload gets woken up.
+var watched = predicate.Funcs{
+	CreateFunc: func(e event.CreateEvent) bool { return !helpers.SkipObject(e.Object) },
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		return !helpers.SkipObject(e.ObjectOld) || !helpers.SkipObject(e.ObjectNew)
+	},
+	DeleteFunc: func(e event.DeleteEvent) bool { return !helpers.SkipObject(e.Object) },
+}
+
+type reconciler struct {
+	client client.Client
+	// reader is uncached, so the state ConfigMap needs no cluster-wide ConfigMap watch.
+	reader    client.Reader
+	namespace string
+	kind      string
+	newObj    func() client.Object
+	now       func() time.Time
+}
+
+func (r *reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Result, err error) {
+	ctx, span := tracer.Start(ctx, "Reconcile", trace.WithAttributes(
+		attribute.String("kind", r.kind),
+		attribute.String("namespace", req.Namespace),
+		attribute.String("name", req.Name),
+	))
+	defer func() { endSpan(span, err) }()
+
+	log := ctrl.LoggerFrom(ctx)
+	key := fmt.Sprintf("%s.%s.%s", strings.ToLower(r.kind), req.Namespace, req.Name)
+
+	state, err := r.loadState(ctx)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	stored, sleeping := state.Data[key]
+
+	obj := r.newObj()
+	if err := r.client.Get(ctx, req.NamespacedName, obj); err != nil {
+		if apierrors.IsNotFound(err) && sleeping {
+			delete(state.Data, key)
+			return ctrl.Result{}, r.saveState(ctx, state)
+		}
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	// No annotations any more: stay awake, which restores the replicas if it was sleeping.
+	asleep, next := false, time.Time{}
+	if !helpers.SkipObject(obj) {
+		asleep, next, err = evaluate(obj.GetAnnotations(), r.now())
+		if err != nil {
+			// The next annotation edit triggers a new reconcile.
+			log.Error(err, "Invalid schedule")
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "invalid schedule")
+			return ctrl.Result{}, nil
+		}
+	}
+
+	span.SetAttributes(attribute.Bool("asleep", asleep), attribute.Bool("sleeping", sleeping))
+
+	scale := &autoscalingv1.Scale{}
+	if err := r.client.SubResource("scale").Get(ctx, obj, scale); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	switch {
+	case asleep && scale.Spec.Replicas > 0:
+		// Save before scaling: a failed scale is retried, a failed save changes nothing.
+		state.Data[key] = strconv.Itoa(int(scale.Spec.Replicas))
+		if err := r.saveState(ctx, state); err != nil {
+			return ctrl.Result{}, err
+		}
+		log.Info("Scaling down", "replicas", scale.Spec.Replicas)
+		if err := r.scaleTo(ctx, obj, scale, 0); err != nil {
+			return ctrl.Result{}, err
+		}
+	case !asleep && sleeping:
+		replicas, err := strconv.ParseInt(stored, 10, 32)
+		if err == nil && replicas < 0 {
+			err = errors.New("negative replicas")
+		}
+		if err != nil {
+			log.Error(err, "Invalid stored replicas, dropping it", "value", stored)
+		} else {
+			// Scale before forgetting: a failed delete just repeats the same scale.
+			log.Info("Waking up", "replicas", replicas)
+			if err := r.scaleTo(ctx, obj, scale, int32(replicas)); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+		delete(state.Data, key)
+		if err := r.saveState(ctx, state); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
+	if next.IsZero() {
+		return ctrl.Result{}, nil
+	}
+	return ctrl.Result{RequeueAfter: next.Sub(r.now())}, nil
+}
+
+// loadState returns the state ConfigMap, or an unsaved empty one if it does not exist yet.
+// shortcut: one ConfigMap holds every sleeping workload (1 MiB, about 15k entries), shard it past that.
+func (r *reconciler) loadState(ctx context.Context) (_ *corev1.ConfigMap, err error) {
+	ctx, span := tracer.Start(ctx, "LoadState")
+	defer func() { endSpan(span, err) }()
+
+	state := &corev1.ConfigMap{}
+	err = r.reader.Get(ctx, types.NamespacedName{Namespace: r.namespace, Name: values.StateConfigMap}, state)
+	if apierrors.IsNotFound(err) {
+		state.ObjectMeta = metav1.ObjectMeta{Namespace: r.namespace, Name: values.StateConfigMap}
+		err = nil
+	}
+	if state.Data == nil {
+		state.Data = map[string]string{}
+	}
+	return state, err
+}
+
+// saveState writes the ConfigMap; a concurrent write fails on resourceVersion and the reconcile is retried.
+func (r *reconciler) saveState(ctx context.Context, state *corev1.ConfigMap) (err error) {
+	ctx, span := tracer.Start(ctx, "SaveState", trace.WithAttributes(attribute.Int("entries", len(state.Data))))
+	defer func() { endSpan(span, err) }()
+
+	if state.ResourceVersion == "" {
+		return r.client.Create(ctx, state)
+	}
+	return r.client.Update(ctx, state)
+}
+
+func (r *reconciler) scaleTo(ctx context.Context, obj client.Object, scale *autoscalingv1.Scale, replicas int32) (err error) {
+	ctx, span := tracer.Start(ctx, "Scale", trace.WithAttributes(
+		attribute.Int("from", int(scale.Spec.Replicas)),
+		attribute.Int("to", int(replicas)),
+	))
+	defer func() { endSpan(span, err) }()
+
+	scale.Spec.Replicas = replicas
+	return r.client.SubResource("scale").Update(ctx, obj, client.WithSubResourceBody(scale))
+}
+
+// endSpan marks the span as failed when err is set, then ends it.
+func endSpan(span trace.Span, err error) {
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	span.End()
+}

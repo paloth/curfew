@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: statefulset-ok
+  namespace: myawesomeapp
+  annotations:
+    curfew/sleep: "0 20 * * 1-5"  # Scale down Mon-Fri at 8pm
+    curfew/wake: "0 8 * * 1-5"  # Scale back up Mon-Fri at 8am
+    curfew/timezone: "Europe/Paris"
+spec:
+  serviceName: test-service
+  replicas: 1
+  selector:
+    matchLabels:
+      app: test-stateful
+  template:
+    metadata:
+      labels:
+        app: test-stateful
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-service
+  namespace: myawesomeapp
+spec:
+  clusterIP: None
+  selector:
+    app: test-stateful
+  ports:
+  - port: 80
