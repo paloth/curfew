@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  # Jaeger all-in-one for local development
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: curfew-jaeger
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      # Jaeger UI
+      - "16686:16686"
+      # OTLP HTTP receiver (used by our app)
+      - "4318:4318"
+      # OTLP gRPC receiver
+      - "4317:4317"
+      # Jaeger Thrift HTTP
+      - "14268:14268"
+      # Jaeger gRPC
+      - "14250:14250"
+    networks:
+      - curfew-network
+
+networks:
+  curfew-network:
+    driver: bridge
