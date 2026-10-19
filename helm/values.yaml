@@ -102,6 +102,12 @@ dev: false
 # Set: one RoleBinding per namespace, and the operator only watches those. Each namespace must exist.
 watchNamespaces: []
 
+# Restricts the operator pod's traffic. Needs a network plugin that enforces NetworkPolicy.
+networkPolicy:
+  enabled: true
+  # Ports the API server listens on (443 on most managed clusters, 6443 on k3s, kind and kubeadm).
+  apiServerPorts: [443, 6443]
+
 # OTLP HTTP endpoint (host:port) that receives traces, e.g. "jaeger-collector.observability:4318".
 # Empty disables tracing.
 tracing:
