@@ -178,3 +178,33 @@ jaeger-ui:
 # Stop Jaeger
 jaeger-down:
     docker compose down
+
+# --- Local cluster on Colima (k3s). Images built with Colima's Docker are visible to k3s, no registry needed.
+
+kube_context := env_var_or_default("KUBE_CONTEXT", "colima")
+
+# Start Colima with Kubernetes (k3s)
+colima-up:
+    colima start --kubernetes
+
+# Build the image into Colima's Docker and install or upgrade curfew on its k3s
+colima-deploy:
+    DOCKER_CONTEXT=colima VERSION=e2e just docker-build
+    just _namespace --context {{kube_context}}
+    helm upgrade --install {{project_name}} helm/ --kube-context {{kube_context}} -n {{operator_ns}} \
+        --set image.tag=e2e --set image.pullPolicy=Never --set dev=true --wait --timeout 2m
+    # Same tag on every build: restart so the pod runs the image just built
+    kubectl --context {{kube_context}} -n {{operator_ns}} rollout restart deployment/{{project_name}}
+    kubectl --context {{kube_context}} -n {{operator_ns}} rollout status deployment/{{project_name}} --timeout 2m
+
+# Follow the operator logs on Colima
+colima-logs:
+    kubectl --context {{kube_context}} -n {{operator_ns}} logs -f deployment/{{project_name}}
+
+# Uninstall curfew from Colima (the curfew-state ConfigMap is kept)
+colima-undeploy:
+    -helm uninstall {{project_name}} --kube-context {{kube_context}} -n {{operator_ns}}
+
+# Deploy to Colima and run the end-to-end test (about 5 minutes)
+e2e: colima-deploy
+    KUBE_CONTEXT={{kube_context}} OPERATOR_NS={{operator_ns}} test/e2e.sh
