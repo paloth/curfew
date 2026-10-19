@@ -1,0 +1,80 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "helm.serviceAccountName" . }}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale", "statefulsets/scale"]
+    verbs: ["get", "update", "patch"]
+{{- if .Values.watchNamespaces }}
+{{- range .Values.watchNamespaces }}
+---
+# Grants the ClusterRole's rules in this namespace only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "helm.serviceAccountName" $ }}-workloads
+  namespace: {{ . }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "helm.serviceAccountName" $ }}
+  namespace: {{ $.Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ include "helm.serviceAccountName" $ }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
+{{- else }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "helm.serviceAccountName" . }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "helm.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ include "helm.serviceAccountName" . }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
+---
+# Namespaced: the state ConfigMap and the leader election lease live next to the operator.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "helm.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+rules:
+  # create cannot be limited by name, get/update can.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["curfew-state"]
+    verbs: ["get", "update"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "create", "update"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "helm.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "helm.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ include "helm.serviceAccountName" . }}
+  apiGroup: rbac.authorization.k8s.io

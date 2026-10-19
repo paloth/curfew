@@ -1,0 +1,10 @@
+curfew is running in namespace {{ .Release.Namespace }}.
+
+Opt a Deployment or StatefulSet in with annotations:
+
+  curfew/sleep: "0 20 * * 1-5"     # cron: scale to 0
+  curfew/wake: "0 8 * * 1-5"       # cron: restore replicas
+  curfew/timezone: "Europe/Paris"  # optional, default UTC
+
+Sleeping workloads and their original replicas:
+  kubectl get configmap curfew-state -n {{ .Release.Namespace }} -o yaml
