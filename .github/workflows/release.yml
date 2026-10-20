@@ -19,6 +19,7 @@ concurrency:
 
 jobs:
   plan:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -43,12 +44,44 @@ jobs:
             if [ "$days" -lt 5 ]; then due=false; fi
           fi
           echo "due=$due" >> "$GITHUB_OUTPUT"
-      - name: Compute version and release notes
-        id: plan
+      - name: Start at v1.0.0
+        id: first
         if: steps.due.outputs.due == 'true'
         run: |
-          python3 hack/release.py --notes release-notes.md | tee -a "$GITHUB_OUTPUT"
-          if [ -f release-notes.md ]; then cat release-notes.md >> "$GITHUB_STEP_SUMMARY"; fi
+          if [ -z "$(git tag --list 'v*')" ]; then echo "bump=major" >> "$GITHUB_OUTPUT"; fi
+      - uses: mathieudutour/github-tag-action@af99e60ce8132224b8e6ebab5023449fe256ed46
+        id: version
+        if: steps.due.outputs.due == 'true'
+        with:
+          github_token: ${{ github.token }}
+          dry_run: true
+          default_bump: false
+          force_bump: ${{ steps.first.outputs.bump }}
+          preset_config: >-
+            {"types": [
+              {"type": "feat", "section": "Features"},
+              {"type": "fix", "section": "Bug Fixes"},
+              {"type": "perf", "section": "Chores"},
+              {"type": "refactor", "section": "Chores"},
+              {"type": "build", "section": "Chores"},
+              {"type": "ci", "section": "Chores"},
+              {"type": "docs", "section": "Chores"},
+              {"type": "test", "section": "Chores"},
+              {"type": "style", "section": "Chores"},
+              {"type": "chore", "section": "Chores"},
+              {"type": "revert", "section": "Chores"}
+            ]}
+      - name: Release notes
+        id: plan
+        if: steps.version.outputs.new_tag != ''
+        env:
+          CHANGELOG: ${{ steps.version.outputs.changelog }}
+          VERSION: ${{ steps.version.outputs.new_version }}
+          TAG: ${{ steps.version.outputs.new_tag }}
+        run: |
+          printf '%s\n' "$CHANGELOG" > release-notes.md
+          cat release-notes.md >> "$GITHUB_STEP_SUMMARY"
+          { echo "release=true"; echo "version=$VERSION"; echo "tag=$TAG"; } >> "$GITHUB_OUTPUT"
       - if: steps.plan.outputs.release == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:

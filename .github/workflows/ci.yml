@@ -36,8 +36,6 @@ jobs:
           go-version-file: go.mod
       - run: go vet ./...
       - run: go test -race ./...
-      - name: Test the release script
-        run: python3 -m unittest discover -s hack
 
   vuln:
     runs-on: ubuntu-latest

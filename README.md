@@ -181,25 +181,25 @@ Code layout:
 - the last release is at least 5 days old,
 - there is a `feat`, `fix` or breaking change since the last `v*` tag.
 
-The version follows [semver](https://semver.org) and is computed from [conventional commits](https://www.conventionalcommits.org) by `hack/release.py` (Python, standard library only):
+The version follows [semver](https://semver.org) and is computed from [conventional commits](https://www.conventionalcommits.org) by [github-tag-action](https://github.com/mathieudutour/github-tag-action):
 
 | Since the last release | Bump | Example |
 |---|---|---|
 | a breaking change (`type!:` or a `BREAKING CHANGE:` footer) | major | 1.4.2 → 2.0.0 |
 | at least one `feat` | minor | 1.4.2 → 1.5.0 |
-| only `fix` | patch | 1.4.2 → 1.4.3 |
+| only `fix` (or `perf`) | patch | 1.4.2 → 1.4.3 |
 | only other types (`chore`, `build`, `ci`, `docs`, …) | no release | |
 
 The first release is always `v1.0.0`.
 
-The release notes list the changes in four groups: Breaking changes, Features, Fixes and Chores. Commits of other types count as chores.
+The release notes list the changes in this order: ⚠ Breaking changes, Features, Bug Fixes, then Chores. Every other commit type is listed under Chores.
 
 Each release:
 1. runs the full CI, including the end-to-end test,
 2. pushes the `ghcr.io/paloth/curfew:X.Y.Z` and `X.Y` images (amd64 and arm64, with SBOM and provenance) to the GitHub Container Registry,
 3. creates the `vX.Y.Z` tag and GitHub release, with the notes and the Helm chart packaged at that version.
 
-To release before the 5 days are up, run the workflow by hand with `force` checked. To preview the next version and notes locally: `python3 hack/release.py --notes /tmp/notes.md` (tests: `python3 -m unittest discover -s hack`).
+To release before the 5 days are up, run the workflow by hand with `force` checked. Releases are only made from `main`. Each run's summary shows the computed release notes.
 
 No secrets are needed: the workflow pushes with its own `GITHUB_TOKEN`. The image is linked to this repository, so it is public like the repo.
 
