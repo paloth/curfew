@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Actions are pinned by commit SHA (the tag is in the comment) so a moved tag cannot change what runs.
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.15.0
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test -race ./...
+
+  vuln:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
+  helm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.1
+      - run: helm lint helm/
+      # Render the optional branches too: per-namespace RBAC, tracing, no NetworkPolicy
+      - run: |
+          helm template ci helm/ > /dev/null
+          helm template ci helm/ --set 'watchNamespaces={dev,staging}' \
+            --set tracing.endpoint=jaeger:4318 --set tracing.insecure=true --set dev=true > /dev/null
+          helm template ci helm/ --set networkPolicy.enabled=false > /dev/null
+
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      # Cross-compiles in the builder stage, so no QEMU is needed for arm64.
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          build-args: VERSION=${{ github.sha }}
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [test, helm]
+    env:
+      KUBE_CONTEXT: kind-curfew
+      OPERATOR_NS: curfew
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.1
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        with:
+          cluster_name: curfew
+      - name: Build the image into the kind cluster
+        run: |
+          docker build --build-arg VERSION=e2e -t paloth/curfew:e2e .
+          kind load docker-image paloth/curfew:e2e --name curfew
+      - name: Deploy curfew
+        run: |
+          kubectl --context "$KUBE_CONTEXT" create namespace "$OPERATOR_NS"
+          kubectl --context "$KUBE_CONTEXT" label namespace "$OPERATOR_NS" \
+            pod-security.kubernetes.io/enforce=restricted pod-security.kubernetes.io/warn=restricted
+          helm upgrade --install curfew helm/ --kube-context "$KUBE_CONTEXT" -n "$OPERATOR_NS" \
+            --set image.tag=e2e --set image.pullPolicy=Never --set dev=true --wait --timeout 3m
+      - name: Run the end-to-end test
+        run: test/e2e.sh
+      - name: Operator logs
+        if: failure()
+        run: |
+          kubectl --context "$KUBE_CONTEXT" -n "$OPERATOR_NS" describe pods
+          kubectl --context "$KUBE_CONTEXT" -n "$OPERATOR_NS" logs deployment/curfew --tail=200
