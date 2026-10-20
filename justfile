@@ -2,7 +2,6 @@
 
 set quiet
 
-# Variables
 binary_dir := "_bin"
 project_name := "curfew"
 registry := env_var_or_default("REGISTRY", "ghcr.io/paloth")
@@ -81,7 +80,7 @@ clean: helm-destroy
     go clean -cache -testcache
     docker rmi -f $(docker images -f "reference={{registry}}/{{project_name}}" -q)
 
-# Run all checks (fmt, vet, lint, test)
+# Run all checks (fmt, vet, lint, test, vuln)
 check: fmt vet lint test vuln
 
 # Scan dependencies for known vulnerabilities
@@ -122,7 +121,7 @@ _namespace *kubectl_args:
     kubectl {{kubectl_args}} label namespace {{operator_ns}} --overwrite \
         pod-security.kubernetes.io/enforce=restricted pod-security.kubernetes.io/warn=restricted
 
-# Apply Kubernetes manifests
+# Uninstall the Helm release
 helm-destroy:
     -helm uninstall {{project_name}} -n {{operator_ns}}
 

@@ -10,7 +10,7 @@ services:
     ports:
       # Jaeger UI
       - "16686:16686"
-      # OTLP HTTP receiver (used by our app)
+      # OTLP HTTP receiver (used by curfew)
       - "4318:4318"
       # OTLP gRPC receiver
       - "4317:4317"

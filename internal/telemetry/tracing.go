@@ -39,19 +39,16 @@ func InitTracer(serviceName, serviceVersion, jaegerEndpoint string) (func(contex
 		return nil, fmt.Errorf("failed to create OTLP exporter: %w", err)
 	}
 
-	// Create trace provider
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(exporter),
 		sdktrace.WithResource(res),
-		sdktrace.WithSampler(sdktrace.AlwaysSample()), // Sample all traces in development
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
 	)
 
-	// Set global tracer provider; tracers from otel.Tracer pick it up even if created earlier.
+	// Tracers from otel.Tracer pick this up even if they were created before InitTracer.
 	otel.SetTracerProvider(tp)
 
-	// Return shutdown function
 	return func(ctx context.Context) error {
-		// Create a context with timeout for shutdown
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 

@@ -22,7 +22,6 @@ func InitLogger(debug bool) {
 
 	Logger = slog.New(slog.NewJSONHandler(os.Stdout, params))
 
-	// Set as default logger for the standard library slog package
 	slog.SetDefault(Logger)
 
 	if debug {
