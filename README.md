@@ -175,6 +175,32 @@ Code layout:
 - `mocks/`: sample annotated manifests for manual testing
 - `test/e2e.sh`: end-to-end test against a running cluster
 
+## Releases
+
+`.github/workflows/release.yml` checks every day and releases when both are true:
+- the last release is at least 5 days old,
+- there is a `feat`, `fix` or breaking change since the last `v*` tag.
+
+The version follows [semver](https://semver.org) and is computed from [conventional commits](https://www.conventionalcommits.org) by `hack/release.py` (Python, standard library only):
+
+| Since the last release | Bump | Example |
+|---|---|---|
+| a breaking change (`type!:` or a `BREAKING CHANGE:` footer) | major | 1.4.2 → 2.0.0 |
+| at least one `feat` | minor | 1.4.2 → 1.5.0 |
+| only `fix` | patch | 1.4.2 → 1.4.3 |
+| only other types (`chore`, `build`, `ci`, `docs`, …) | no release | |
+
+The release notes list the changes in four groups: Breaking changes, Features, Fixes and Chores. Commits of other types count as chores.
+
+Each release:
+1. runs the full CI, including the end-to-end test,
+2. pushes the `paloth/curfew:X.Y.Z` and `X.Y` images (amd64 and arm64, with SBOM and provenance),
+3. creates the `vX.Y.Z` tag and GitHub release, with the notes and the Helm chart packaged at that version.
+
+To release before the 5 days are up, run the workflow by hand with `force` checked. To preview the next version and notes locally: `python3 hack/release.py --notes /tmp/notes.md` (tests: `python3 -m unittest discover -s hack`).
+
+The workflow needs two repository secrets, `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (a Docker Hub access token with write access).
+
 ## License
 
 MIT, see [LICENSE](LICENSE).

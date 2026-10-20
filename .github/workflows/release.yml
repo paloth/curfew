@@ -1,0 +1,109 @@
+name: Release
+
+# A release ships when the last one is at least 5 days old and there is a feat, fix or breaking
+# change since the last v* tag. Cron cannot express "every 5 days" (*/5 restarts each month),
+# so this checks daily.
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Release now, even if the last release is less than 5 days old
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+# Actions are pinned by commit SHA (the tag is in the comment), as in ci.yml.
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release: ${{ steps.plan.outputs.release }}
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # all commits and tags, for the changelog
+      - name: Check 5 days since the last release
+        id: due
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          last=$(gh release list --limit 1 --json publishedAt --jq '.[0].publishedAt // empty')
+          due=true
+          if [ -n "$last" ] && [ "$FORCE" != "true" ]; then
+            days=$(( ($(date +%s) - $(date -d "$last" +%s)) / 86400 ))
+            echo "Last release: $last ($days day(s) ago)"
+            if [ "$days" -lt 5 ]; then due=false; fi
+          fi
+          echo "due=$due" >> "$GITHUB_OUTPUT"
+      - name: Compute version and release notes
+        id: plan
+        if: steps.due.outputs.due == 'true'
+        run: |
+          python3 hack/release.py --notes release-notes.md | tee -a "$GITHUB_OUTPUT"
+          if [ -f release-notes.md ]; then cat release-notes.md >> "$GITHUB_STEP_SUMMARY"; fi
+      - if: steps.plan.outputs.release == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-notes
+          path: release-notes.md
+
+  ci:
+    needs: plan
+    if: needs.plan.outputs.release == 'true'
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: [plan, ci]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write # create the tag and the release
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      TAG: ${{ needs.plan.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-notes
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Image tags
+        id: tags
+        run: echo "list=paloth/curfew:${VERSION},paloth/curfew:${VERSION%.*}" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          build-args: VERSION=${{ env.VERSION }}
+          tags: ${{ steps.tags.outputs.list }}
+          push: true
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.1
+      - name: Package the chart at this version
+        run: helm package helm/ --version "$VERSION" --app-version "$VERSION" --destination dist
+      - name: Create the tag and the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" dist/curfew-"$VERSION".tgz \
+            --target "$GITHUB_SHA" --title "$TAG" --notes-file release-notes.md

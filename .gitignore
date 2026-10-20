@@ -33,3 +33,6 @@ go.work.sum
 
 # Build output
 _bin/
+
+# Python bytecode (hack/release.py)
+__pycache__/
