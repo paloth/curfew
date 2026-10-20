@@ -100,8 +100,8 @@ jobs:
           cluster_name: curfew
       - name: Build the image into the kind cluster
         run: |
-          docker build --build-arg VERSION=e2e -t paloth/curfew:e2e .
-          kind load docker-image paloth/curfew:e2e --name curfew
+          docker build --build-arg VERSION=e2e -t ghcr.io/paloth/curfew:e2e .
+          kind load docker-image ghcr.io/paloth/curfew:e2e --name curfew
       - name: Deploy curfew
         run: |
           kubectl --context "$KUBE_CONTEXT" create namespace "$OPERATOR_NS"

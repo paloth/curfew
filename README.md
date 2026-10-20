@@ -22,7 +22,7 @@ Main values (`helm/values.yaml`):
 
 | Value | Default | What it does |
 |---|---|---|
-| `image.repository` / `image.tag` | `paloth/curfew` / chart `appVersion` | Operator image. Use an immutable version tag. |
+| `image.repository` / `image.tag` | `ghcr.io/paloth/curfew` / chart `appVersion` | Operator image. Use an immutable version tag. |
 | `replicaCount` | `1` | Operator pods. Leader election is always on, so more than one is safe: only the leader acts. |
 | `dev` | `false` | Debug logs |
 | `watchNamespaces` | `[]` | Namespaces curfew may act in. Empty means the whole cluster. |
@@ -194,12 +194,12 @@ The release notes list the changes in four groups: Breaking changes, Features, F
 
 Each release:
 1. runs the full CI, including the end-to-end test,
-2. pushes the `paloth/curfew:X.Y.Z` and `X.Y` images (amd64 and arm64, with SBOM and provenance),
+2. pushes the `ghcr.io/paloth/curfew:X.Y.Z` and `X.Y` images (amd64 and arm64, with SBOM and provenance) to the GitHub Container Registry,
 3. creates the `vX.Y.Z` tag and GitHub release, with the notes and the Helm chart packaged at that version.
 
 To release before the 5 days are up, run the workflow by hand with `force` checked. To preview the next version and notes locally: `python3 hack/release.py --notes /tmp/notes.md` (tests: `python3 -m unittest discover -s hack`).
 
-The workflow needs two repository secrets, `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (a Docker Hub access token with write access).
+No secrets are needed: the workflow pushes with its own `GITHUB_TOKEN`. The image is linked to this repository, so it is public like the repo.
 
 ## License
 

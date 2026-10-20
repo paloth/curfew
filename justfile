@@ -5,7 +5,7 @@ set quiet
 # Variables
 binary_dir := "_bin"
 project_name := "curfew"
-registry := env_var_or_default("REGISTRY", "paloth")
+registry := env_var_or_default("REGISTRY", "ghcr.io/paloth")
 version := env_var_or_default("VERSION", "latest")
 local_bin:= binary_dir + "/" + project_name
 image_tag := registry + "/" + project_name + ":" + version
