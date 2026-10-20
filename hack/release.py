@@ -36,6 +36,7 @@ SECTIONS = [
 HEADER = re.compile(r"^(\w+)(?:\(([^)]*)\))?(!)?: (.+)$")
 BREAKING_NOTE = re.compile(r"^BREAKING[ -]CHANGE: ?", re.MULTILINE)
 TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+FIRST = (1, 0, 0)
 
 
 @dataclass(frozen=True)
@@ -71,17 +72,22 @@ def classify(hash_: str, subject: str, body: str) -> Entry:
     return Entry(kind, desc, hash_, scope or "", note)
 
 
-def next_version(prev: tuple[int, int, int], entries: list[Entry]) -> tuple[int, int, int] | None:
-    """Bump prev for the highest kind in entries; None when nothing warrants a release."""
-    major, minor, patch = prev
+def next_version(prev: tuple[int, int, int] | None, entries: list[Entry]) -> tuple[int, int, int] | None:
+    """Bump prev for the highest kind in entries; None when nothing warrants a release.
+
+    prev is None before the first release, which is always FIRST.
+    """
     top = max((e.kind for e in entries), default=Kind.CHORE)
+    if top == Kind.CHORE:
+        return None
+    if prev is None:
+        return FIRST
+    major, minor, patch = prev
     if top == Kind.BREAKING:
         return (major + 1, 0, 0)
     if top == Kind.FEATURE:
         return (major, minor + 1, 0)
-    if top == Kind.FIX:
-        return (major, minor, patch + 1)
-    return None
+    return (major, minor, patch + 1)
 
 
 def render(entries: list[Entry], compare: str = "") -> str:
@@ -115,7 +121,7 @@ def main() -> int:
 
     tags = git("tag", "--list", "v*", "--sort=-v:refname").splitlines()
     prev_tag = tags[0] if tags else ""
-    prev, log_range = (0, 0, 0), "HEAD"
+    prev, log_range = None, "HEAD"
     if prev_tag:
         m = TAG.match(prev_tag)
         if not m:

@@ -190,6 +190,8 @@ The version follows [semver](https://semver.org) and is computed from [conventio
 | only `fix` | patch | 1.4.2 → 1.4.3 |
 | only other types (`chore`, `build`, `ci`, `docs`, …) | no release | |
 
+The first release is always `v1.0.0`.
+
 The release notes list the changes in four groups: Breaking changes, Features, Fixes and Chores. Commits of other types count as chores.
 
 Each release:

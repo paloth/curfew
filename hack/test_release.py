@@ -39,8 +39,11 @@ class NextVersionTest(unittest.TestCase):
             with self.subTest(name):
                 self.assertEqual(next_version(prev, [Entry(k, "x") for k in kinds]), want)
 
-    def test_first_release_with_a_feature(self):
-        self.assertEqual(next_version((0, 0, 0), [Entry(Kind.FEATURE, "x")]), (0, 1, 0))
+    def test_first_release_is_1_0_0(self):
+        for kind in (Kind.FIX, Kind.FEATURE, Kind.BREAKING):
+            with self.subTest(kind.name):
+                self.assertEqual(next_version(None, [Entry(kind, "x")]), (1, 0, 0))
+        self.assertIsNone(next_version(None, [Entry(Kind.CHORE, "x")]))
 
 
 class RenderTest(unittest.TestCase):
