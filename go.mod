@@ -1,6 +1,6 @@
 module curfew
 
-go 1.27.0
+go 1.27.3
 
 require (
 	github.com/go-logr/logr v1.4.4
