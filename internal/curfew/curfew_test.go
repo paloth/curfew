@@ -2,6 +2,7 @@ package curfew
 
 import (
 	"context"
+	"maps"
 	"testing"
 	"time"
 
@@ -144,6 +145,7 @@ func newTestReconciler(c client.Client, now *time.Time) *reconciler {
 		namespace: "curfew",
 		kind:      "Deployment",
 		newObj:    func() client.Object { return &appsv1.Deployment{} },
+		newList:   func() client.ObjectList { return &appsv1.DeploymentList{} },
 		now:       func() time.Time { return *now },
 	}
 }
@@ -218,6 +220,11 @@ func TestWatchedPassesAnnotationRemoval(t *testing.T) {
 
 	annotated := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "shop", Annotations: schedule}}
 	plain := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "shop"}}
+	inScheduledNs := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "office"}}
+	c := fake.NewClientBuilder().WithObjects(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop"}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "office", Annotations: schedule}},
+	).Build()
 
 	tests := []struct {
 		name     string
@@ -227,9 +234,10 @@ func TestWatchedPassesAnnotationRemoval(t *testing.T) {
 		{"annotations removed", annotated, plain, true},
 		{"annotations added", plain, annotated, true},
 		{"never annotated", plain, plain, false},
+		{"namespace has a schedule", inScheduledNs, inScheduledNs, true},
 	}
 	for _, tt := range tests {
-		if got := watched.Update(event.UpdateEvent{ObjectOld: tt.old, ObjectNew: tt.new}); got != tt.want {
+		if got := watched(c).Update(event.UpdateEvent{ObjectOld: tt.old, ObjectNew: tt.new}); got != tt.want {
 			t.Errorf("%s: watched.Update = %v, want %v", tt.name, got, tt.want)
 		}
 	}
@@ -279,5 +287,92 @@ func TestWatchNamespaces(t *testing.T) {
 	}
 	if _, ok := got["staging"]; !ok {
 		t.Errorf("watchNamespaces = %v, want staging", got)
+	}
+}
+
+func TestReconcileFollowsNamespaceSchedule(t *testing.T) {
+	logs.InitLogger(false)
+	ctx := context.Background()
+
+	nsAnnotations := map[string]string{values.ExcludeLabelsAnnotation: "keep-alive"}
+	maps.Copy(nsAnnotations, schedule)
+	three := int32(3)
+	deploy := func(name string, labels, annotations map[string]string) *appsv1.Deployment {
+		return &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "shop", Labels: labels, Annotations: annotations},
+			Spec:       appsv1.DeploymentSpec{Replicas: &three},
+		}
+	}
+	// 22:00 is inside the namespace's sleep window; the own rule here is awake all evening.
+	ownRule := map[string]string{values.SleepAnnotation: "0 23 * * *", values.WakeAnnotation: "0 21 * * *", values.TimezoneAnnotation: "Europe/Paris"}
+	c := fake.NewClientBuilder().WithObjects(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop", Annotations: nsAnnotations}},
+		deploy("app", nil, nil),
+		deploy("db", map[string]string{"keep-alive": "yes"}, nil),
+		deploy("own", nil, ownRule),
+	).Build()
+	now := paris(t, "2026-10-19 22:00")
+	r := newTestReconciler(c, &now)
+
+	want := map[string]int32{"app": 0, "db": 3, "own": 3}
+	for name, replicas := range want {
+		key := types.NamespacedName{Namespace: "shop", Name: name}
+		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+			t.Fatal(err)
+		}
+		got := &appsv1.Deployment{}
+		if err := c.Get(ctx, key, got); err != nil {
+			t.Fatal(err)
+		}
+		if *got.Spec.Replicas != replicas {
+			t.Errorf("%s: replicas = %d, want %d", name, *got.Spec.Replicas, replicas)
+		}
+	}
+
+	// Removing the namespace schedule enqueues its workloads, and app wakes up.
+	reqs := r.workloadsIn(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop"}})
+	if len(reqs) != 3 {
+		t.Fatalf("workloadsIn = %d requests, want 3", len(reqs))
+	}
+	ns := &corev1.Namespace{}
+	if err := c.Get(ctx, types.NamespacedName{Name: "shop"}, ns); err != nil {
+		t.Fatal(err)
+	}
+	ns.Annotations = nil
+	if err := c.Update(ctx, ns); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "shop", Name: "app"}}); err != nil {
+		t.Fatal(err)
+	}
+	got := &appsv1.Deployment{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "shop", Name: "app"}, got); err != nil {
+		t.Fatal(err)
+	}
+	if *got.Spec.Replicas != 3 {
+		t.Errorf("app after namespace schedule removed: replicas = %d, want 3", *got.Spec.Replicas)
+	}
+}
+
+func TestNamespaceScheduleChanged(t *testing.T) {
+	plain := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop"}}
+	scheduledNs := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop", Annotations: schedule}}
+	relabelled := scheduledNs.DeepCopy()
+	relabelled.Labels = map[string]string{"team": "a"}
+
+	tests := []struct {
+		name     string
+		old, new client.Object
+		want     bool
+	}{
+		{"schedule added", plain, scheduledNs, true},
+		{"schedule removed", scheduledNs, plain, true},
+		{"only labels changed", scheduledNs, relabelled, false},
+		{"never scheduled", plain, plain, false},
+	}
+	for _, tt := range tests {
+		if got := namespaceScheduleChanged.Update(event.UpdateEvent{ObjectOld: tt.old, ObjectNew: tt.new}); got != tt.want {
+			t.Errorf("%s: = %v, want %v", tt.name, got, tt.want)
+		}
 	}
 }

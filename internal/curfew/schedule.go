@@ -1,13 +1,67 @@
 package curfew
 
 import (
+	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"curfew/internal/values"
 
 	"github.com/robfig/cron/v3"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
+
+func hasSchedule(o metav1.Object) bool {
+	_, ok := o.GetAnnotations()[values.SleepAnnotation]
+	return ok
+}
+
+// scheduleFor returns the annotations holding obj's schedule: its own when it sets curfew/sleep,
+// else its namespace's unless the namespace excludes it by kind or label. nil when none applies.
+func scheduleFor(obj metav1.Object, kind string, ns *corev1.Namespace) map[string]string {
+	switch {
+	case strings.HasPrefix(obj.GetNamespace(), values.NsExcludePrefix):
+		return nil
+	case hasSchedule(obj):
+		return obj.GetAnnotations()
+	case ns == nil || !hasSchedule(ns) || excluded(ns.GetAnnotations(), kind, obj.GetLabels()):
+		return nil
+	}
+	return ns.GetAnnotations()
+}
+
+// excluded reads curfew/exclude-kinds ("Deployment,StatefulSet") and curfew/exclude-labels
+// ("tier=data,keep-alive": key=value, or key alone for any value); any match excludes.
+func excluded(annotations map[string]string, kind string, labels map[string]string) bool {
+	for k := range strings.SplitSeq(annotations[values.ExcludeKindsAnnotation], ",") {
+		if strings.EqualFold(strings.TrimSpace(k), kind) {
+			return true
+		}
+	}
+	for entry := range strings.SplitSeq(annotations[values.ExcludeLabelsAnnotation], ",") {
+		key, want, hasValue := strings.Cut(strings.TrimSpace(entry), "=")
+		if v, ok := labels[key]; key != "" && ok && (!hasValue || v == want) {
+			return true
+		}
+	}
+	return false
+}
+
+// scheduled reports whether obj may follow a schedule, its own or its namespace's.
+// Exclusions are left to Reconcile, so a workload that becomes excluded still gets woken up.
+func scheduled(ctx context.Context, c client.Reader, obj client.Object) bool {
+	if strings.HasPrefix(obj.GetNamespace(), values.NsExcludePrefix) {
+		return false
+	}
+	if hasSchedule(obj) {
+		return true
+	}
+	ns := &corev1.Namespace{}
+	return c.Get(ctx, client.ObjectKey{Name: obj.GetNamespace()}, ns) == nil && hasSchedule(ns)
+}
 
 // evaluate reports whether the workload should be asleep at now, and when that next changes.
 func evaluate(annotations map[string]string, now time.Time) (bool, time.Time, error) {

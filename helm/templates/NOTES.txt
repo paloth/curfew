@@ -6,5 +6,10 @@ Opt a Deployment or StatefulSet in with annotations:
   curfew/wake: "0 8 * * 1-5"       # cron: restore replicas
   curfew/timezone: "Europe/Paris"  # optional, default UTC
 
+Or annotate a namespace to schedule all its workloads, optionally excluding some:
+
+  curfew/exclude-kinds: "StatefulSet"
+  curfew/exclude-labels: "tier=data,keep-alive"
+
 Sleeping workloads and their original replicas:
   kubectl get configmap curfew-state -n {{ .Release.Namespace }} -o yaml

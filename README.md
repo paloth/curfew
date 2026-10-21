@@ -66,6 +66,31 @@ At any moment curfew looks at which comes next, the next sleep or the next wake:
 
 It then schedules its next check for exactly that time. Adding the annotations during a sleep window scales the workload down right away.
 
+### Namespace schedule
+
+Put the same annotations on a namespace to apply them to every Deployment and StatefulSet in it:
+
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: staging
+  annotations:
+    curfew/sleep: "0 20 * * 1-5"
+    curfew/wake: "0 8 * * 1-5"
+    curfew/timezone: "Europe/Paris"
+    curfew/exclude-kinds: "StatefulSet"          # optional
+    curfew/exclude-labels: "tier=data,keep-alive" # optional
+```
+
+A workload in that namespace follows the first rule that applies:
+
+1. **Its own rule:** a workload with its own `curfew/sleep` uses its own `curfew/sleep`, `curfew/wake` and `curfew/timezone`, and ignores the namespace.
+2. **Excluded:** the namespace's rule is skipped for a workload whose kind is listed in `curfew/exclude-kinds` (`Deployment`, `StatefulSet`), or whose labels match an entry of `curfew/exclude-labels`. An entry is `key=value` (that exact value) or `key` (any value); one matching entry is enough.
+3. **The namespace's rule.**
+
+Changing or removing the namespace annotations applies at once. Workloads that are no longer covered, because the schedule was removed or they became excluded, are woken up.
+
 ## Behavior
 
 - **Original replicas** are stored in the ConfigMap `curfew-state` in the operator's namespace, with one key per workload: `<kind>.<namespace>.<name>`. To see what is asleep:
@@ -77,7 +102,7 @@ It then schedules its next check for exactly that time. Adding the annotations d
 - **Deleting a sleeping workload** removes its entry.
 - **Scaling by hand during sleep:** if you scale a sleeping workload up, curfew saves the new count and scales it back to 0. Remove the annotations to keep it up.
 - **Already at 0 at sleep time:** nothing is stored, and the workload stays at 0 on wake.
-- **Excluded namespaces:** workloads in namespaces starting with `kube-` are ignored, even when annotated.
+- **Excluded namespaces:** workloads in namespaces starting with `kube-` are ignored, even when annotated, and so are those namespaces' own annotations.
 - **Invalid annotations** (a bad cron expression or time zone) are logged as errors and the workload is left as it is. Fixing the annotation triggers a new check.
 - **Invalid stored counts** (negative, not a number, or too large) are logged and dropped. The workload is not scaled.
 - **Uninstalling the operator** leaves sleeping workloads at 0. The `curfew-state` ConfigMap is created by the operator, not by Helm, so it survives `helm uninstall`. A reinstall picks the entries up and wakes the workloads on schedule.
@@ -167,8 +192,7 @@ It runs in a throwaway `curfew-e2e` namespace. `KUBE_CONTEXT` (default `colima`)
 Code layout:
 
 - `cmd/root.go`: CLI entry point, logging and tracing setup
-- `internal/curfew/`: controller setup, reconcile loop (`curfew.go`) and schedule check (`schedule.go`)
-- `internal/helpers/`: which workloads to watch
+- `internal/curfew/`: controller setup, reconcile loop (`curfew.go`), and which rule applies and when (`schedule.go`)
 - `internal/values/`: annotation names and constants
 - `internal/telemetry/`: OpenTelemetry tracer setup
 - `helm/`: the chart
