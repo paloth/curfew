@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # End-to-end test against a deployed curfew (see `just e2e`). About 5 minutes:
-#   1. a Deployment and a StatefulSet sleep and wake on real cron times, a few minutes from now
+#   1. a Deployment, a StatefulSet and a CronJob sleep and wake on real cron times, a few minutes from now
 #   2. a sleeping Deployment wakes up as soon as its annotations are removed
 set -euo pipefail
 
@@ -44,6 +44,8 @@ expect() {
 }
 
 both_at() { [[ "$(replicas deployment/app)" == "$1" && "$(replicas statefulset/db)" == "$1" ]]; }
+suspended() { k -n "$NS" get cronjob/job -o jsonpath='{.spec.suspend}'; }
+cron_is() { [[ "$(suspended)" == "$1" ]]; }
 app_at() { [[ "$(replicas deployment/app)" == "$1" ]]; }
 
 trap 'k delete namespace "$NS" --ignore-not-found --wait=false >/dev/null' EXIT
@@ -94,15 +96,38 @@ spec:
       containers:
         - name: pause
           image: registry.k8s.io/pause:3.10
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: job
+  namespace: $NS
+  annotations:
+    curfew/sleep: "$sleep_m $sleep_h * * *"
+    curfew/wake: "$wake_m $wake_h * * *"
+spec:
+  schedule: "0 0 1 1 *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: pause
+              image: registry.k8s.io/pause:3.10
 EOF
 
 echo "1. Scheduled sleep and wake"
 wait_for "both scaled to 0 at sleep time" 240 both_at 0
 expect "stored deployment" "$(stored "deployment.$NS.app")" 2
 expect "stored statefulset" "$(stored "statefulset.$NS.db")" 2
+wait_for "cronjob suspended" 30 cron_is true
+expect "stored cronjob" "$(stored "cronjob.$NS.job")" 1
 wait_for "both back to 2 at wake time" 240 both_at 2
 expect "stored deployment after wake" "$(stored "deployment.$NS.app")" ""
 expect "stored statefulset after wake" "$(stored "statefulset.$NS.db")" ""
+wait_for "cronjob resumed" 30 cron_is false
+expect "stored cronjob after wake" "$(stored "cronjob.$NS.job")" ""
 
 echo "2. Removing the annotations wakes a sleeping workload"
 # Wake on Jan 1 comes before sleep on Jan 2, so this is "asleep" right now (except on Jan 1).
