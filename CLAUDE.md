@@ -56,7 +56,8 @@ Runs in-cluster only, built on controller-runtime (`internal/curfew`), with lead
   - `curfew/sleep`: cron expression, when to scale to 0
   - `curfew/wake`: cron expression, when to restore
   - `curfew/timezone`: IANA zone, default UTC
-- Namespaces starting with `kube-` are ignored (`internal/helpers.SkipObject`).
+- A namespace can carry the same annotations to schedule all its workloads, plus `curfew/exclude-kinds` and `curfew/exclude-labels`; a workload's own `curfew/sleep` always wins (`scheduleFor` in `internal/curfew/schedule.go`). Namespace annotation changes re-reconcile the namespace's workloads (`workloadsIn`).
+- Namespaces starting with `kube-` are ignored (`scheduleFor`, `scheduled`).
 - Scaling goes only through the `/scale` subresource; the ClusterRole has no write on the workloads themselves.
 - Original replica counts live in the `curfew-state` ConfigMap in the operator's namespace (`POD_NAMESPACE`), keyed `<kind>.<namespace>.<name>`.
 - Each reconcile requeues itself at the next sleep or wake time; removing the annotations wakes the workload.

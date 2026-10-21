@@ -78,3 +78,26 @@ roleRef:
   kind: Role
   name: {{ include "helm.serviceAccountName" . }}
   apiGroup: rbac.authorization.k8s.io
+---
+# Namespace annotations hold namespace-wide schedules; read cluster-wide in both watch modes.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "helm.serviceAccountName" . }}-namespaces
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "helm.serviceAccountName" . }}-namespaces
+subjects:
+- kind: ServiceAccount
+  name: {{ include "helm.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ include "helm.serviceAccountName" . }}-namespaces
+  apiGroup: rbac.authorization.k8s.io

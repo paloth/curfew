@@ -113,4 +113,15 @@ k -n "$NS" annotate deployment/app curfew/sleep- curfew/wake- >/dev/null
 wait_for "app back to 2" 60 app_at 2
 expect "stored deployment after removal" "$(stored "deployment.$NS.app")" ""
 
+echo "3. Namespace schedule, with StatefulSets excluded"
+k -n "$NS" annotate statefulset/db curfew/sleep- curfew/wake- >/dev/null
+k annotate namespace "$NS" --overwrite \
+  curfew/sleep="0 0 2 1 *" curfew/wake="0 0 1 1 *" curfew/exclude-kinds=StatefulSet >/dev/null
+wait_for "app follows the namespace and scales to 0" 60 app_at 0
+expect "stored deployment" "$(stored "deployment.$NS.app")" 2
+sleep 5
+expect "db (excluded kind) replicas" "$(replicas statefulset/db)" 2
+k annotate namespace "$NS" curfew/sleep- curfew/wake- curfew/exclude-kinds- >/dev/null
+wait_for "app back to 2 once the namespace schedule is removed" 60 app_at 2
+
 echo "PASS"

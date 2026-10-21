@@ -5,12 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
-	"curfew/internal/helpers"
 	"curfew/internal/logs"
 	"curfew/internal/values"
 
@@ -23,16 +23,20 @@ import (
 	autoscalingv1 "k8s.io/api/autoscaling/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 // Run starts the controllers for Deployments and StatefulSets and blocks until SIGINT/SIGTERM.
@@ -74,23 +78,30 @@ func Run() error {
 		return err
 	}
 
-	for kind, newObj := range map[string]func() client.Object{
-		"Deployment":  func() client.Object { return &appsv1.Deployment{} },
-		"StatefulSet": func() client.Object { return &appsv1.StatefulSet{} },
+	for _, w := range []struct {
+		kind    string
+		newObj  func() client.Object
+		newList func() client.ObjectList
+	}{
+		{"Deployment", func() client.Object { return &appsv1.Deployment{} }, func() client.ObjectList { return &appsv1.DeploymentList{} }},
+		{"StatefulSet", func() client.Object { return &appsv1.StatefulSet{} }, func() client.ObjectList { return &appsv1.StatefulSetList{} }},
 	} {
 		r := &reconciler{
 			client:    mgr.GetClient(),
 			reader:    mgr.GetAPIReader(),
 			namespace: namespace,
-			kind:      kind,
-			newObj:    newObj,
+			kind:      w.kind,
+			newObj:    w.newObj,
+			newList:   w.newList,
 			now:       time.Now,
 		}
 		err := ctrl.NewControllerManagedBy(mgr).
-			For(newObj(), builder.WithPredicates(
-				watched,
-				predicate.Or(predicate.GenerationChangedPredicate{}, predicate.AnnotationChangedPredicate{}),
+			For(w.newObj(), builder.WithPredicates(
+				watched(mgr.GetClient()),
+				predicate.Or(predicate.GenerationChangedPredicate{}, predicate.AnnotationChangedPredicate{}, predicate.LabelChangedPredicate{}),
 			)).
+			Watches(&corev1.Namespace{}, handler.EnqueueRequestsFromMapFunc(r.workloadsIn),
+				builder.WithPredicates(namespaceScheduleChanged)).
 			Complete(r)
 		if err != nil {
 			return err
@@ -116,13 +127,45 @@ func watchNamespaces(list string) map[string]cache.Config {
 
 var tracer = otel.Tracer("curfew/internal/curfew")
 
-// watched also passes updates that remove the annotations, so a sleeping workload gets woken up.
-var watched = predicate.Funcs{
-	CreateFunc: func(e event.CreateEvent) bool { return !helpers.SkipObject(e.Object) },
+// watched passes workloads that follow a schedule, their own or their namespace's, including
+// updates that remove it, so a sleeping workload gets woken up.
+func watched(c client.Reader) predicate.Funcs {
+	f := func(o client.Object) bool { return scheduled(context.Background(), c, o) }
+	return predicate.Funcs{
+		CreateFunc: func(e event.CreateEvent) bool { return f(e.Object) },
+		UpdateFunc: func(e event.UpdateEvent) bool { return f(e.ObjectOld) || f(e.ObjectNew) },
+		DeleteFunc: func(e event.DeleteEvent) bool { return f(e.Object) },
+	}
+}
+
+// namespaceScheduleChanged passes namespaces whose annotations change while they have, or had, a
+// schedule. Workloads created later bring their own events.
+var namespaceScheduleChanged = predicate.Funcs{
+	CreateFunc: func(event.CreateEvent) bool { return false },
 	UpdateFunc: func(e event.UpdateEvent) bool {
-		return !helpers.SkipObject(e.ObjectOld) || !helpers.SkipObject(e.ObjectNew)
+		return (hasSchedule(e.ObjectOld) || hasSchedule(e.ObjectNew)) &&
+			!maps.Equal(e.ObjectOld.GetAnnotations(), e.ObjectNew.GetAnnotations())
 	},
-	DeleteFunc: func(e event.DeleteEvent) bool { return !helpers.SkipObject(e.Object) },
+	DeleteFunc:  func(event.DeleteEvent) bool { return false },
+	GenericFunc: func(event.GenericEvent) bool { return false },
+}
+
+// workloadsIn lists this controller's workloads in a namespace whose schedule changed.
+func (r *reconciler) workloadsIn(ctx context.Context, ns client.Object) []reconcile.Request {
+	list := r.newList()
+	if err := r.client.List(ctx, list, client.InNamespace(ns.GetName())); err != nil {
+		// e.g. a namespace outside watchNamespaces
+		ctrl.LoggerFrom(ctx).Error(err, "Cannot list workloads", "namespace", ns.GetName())
+		return nil
+	}
+	var reqs []reconcile.Request
+	_ = meta.EachListItem(list, func(o runtime.Object) error {
+		if obj, ok := o.(client.Object); ok {
+			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(obj)})
+		}
+		return nil
+	})
+	return reqs
 }
 
 type reconciler struct {
@@ -132,6 +175,7 @@ type reconciler struct {
 	namespace string
 	kind      string
 	newObj    func() client.Object
+	newList   func() client.ObjectList
 	now       func() time.Time
 }
 
@@ -161,10 +205,18 @@ func (r *reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// No annotations any more: stay awake, which restores the replicas if it was sleeping.
+	ns := &corev1.Namespace{}
+	if err := r.client.Get(ctx, types.NamespacedName{Name: req.Namespace}, ns); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, err
+		}
+		ns = nil
+	}
+
+	// No schedule (none set, or excluded): stay awake, which restores the replicas if it was sleeping.
 	asleep, next := false, time.Time{}
-	if !helpers.SkipObject(obj) {
-		asleep, next, err = evaluate(obj.GetAnnotations(), r.now())
+	if sched := scheduleFor(obj, r.kind, ns); sched != nil {
+		asleep, next, err = evaluate(sched, r.now())
 		if err != nil {
 			// The next annotation edit triggers a new reconcile.
 			log.Error(err, "Invalid schedule")
