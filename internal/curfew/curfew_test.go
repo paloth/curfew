@@ -13,9 +13,11 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -375,4 +377,47 @@ func TestNamespaceScheduleChanged(t *testing.T) {
 			t.Errorf("%s: = %v, want %v", tt.name, got, tt.want)
 		}
 	}
+}
+
+func TestReconcileSuspendsCronJob(t *testing.T) {
+	logs.InitLogger(false)
+	ctx := context.Background()
+
+	cronJob := func(name string, suspend bool) *batchv1.CronJob {
+		return &batchv1.CronJob{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "shop", Annotations: schedule},
+			Spec:       batchv1.CronJobSpec{Schedule: "*/5 * * * *", Suspend: ptr.To(suspend)},
+		}
+	}
+	c := fake.NewClientBuilder().WithObjects(cronJob("report", false), cronJob("paused", true)).Build()
+	now := paris(t, "2026-10-19 22:00")
+	r := newTestReconciler(c, &now)
+	r.kind, r.newObj = "CronJob", func() client.Object { return &batchv1.CronJob{} }
+
+	check := func(name string, wantSuspend bool, wantStored string) {
+		t.Helper()
+		key := types.NamespacedName{Namespace: "shop", Name: name}
+		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+			t.Fatal(err)
+		}
+		got := &batchv1.CronJob{}
+		if err := c.Get(ctx, key, got); err != nil {
+			t.Fatal(err)
+		}
+		if ptr.Deref(got.Spec.Suspend, false) != wantSuspend {
+			t.Errorf("%s: suspend = %v, want %v", name, ptr.Deref(got.Spec.Suspend, false), wantSuspend)
+		}
+		state := &corev1.ConfigMap{}
+		_ = c.Get(ctx, stateKey, state)
+		if v := state.Data["cronjob.shop."+name]; v != wantStored {
+			t.Errorf("%s: stored = %q, want %q", name, v, wantStored)
+		}
+	}
+
+	check("report", true, "1")
+	check("paused", true, "") // already suspended by its owner: nothing to restore later
+
+	now = paris(t, "2026-10-20 08:00")
+	check("report", false, "")
+	check("paused", true, "")
 }

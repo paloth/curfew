@@ -1,6 +1,6 @@
 curfew is running in namespace {{ .Release.Namespace }}.
 
-Opt a Deployment or StatefulSet in with annotations:
+Opt a Deployment, StatefulSet or CronJob in with annotations:
 
   curfew/sleep: "0 20 * * 1-5"     # cron: scale to 0
   curfew/wake: "0 8 * * 1-5"       # cron: restore replicas

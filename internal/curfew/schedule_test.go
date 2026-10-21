@@ -39,6 +39,7 @@ func TestScheduleFor(t *testing.T) {
 		{"no rule anywhere", deploy("shop", nil, nil), "Deployment", ns("shop", nil), nil},
 		{"namespace not found", deploy("shop", nil, nil), "Deployment", nil, nil},
 		{"excluded kind, any case", deploy("shop", nil, nil), "StatefulSet", ns("shop", nsSchedule), nil},
+		{"CronJob not excluded", deploy("shop", nil, nil), "CronJob", ns("shop", nsSchedule), nsSchedule},
 		{"excluded label value", deploy("shop", map[string]string{"tier": "data"}, nil), "Deployment", ns("shop", nsSchedule), nil},
 		{"other label value", deploy("shop", map[string]string{"tier": "web"}, nil), "Deployment", ns("shop", nsSchedule), nsSchedule},
 		{"excluded label key, any value", deploy("shop", map[string]string{"keep-alive": "no"}, nil), "Deployment", ns("shop", nsSchedule), nil},

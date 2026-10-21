@@ -9,6 +9,10 @@ rules:
   - apiGroups: ["apps"]
     resources: ["deployments/scale", "statefulsets/scale"]
     verbs: ["get", "update", "patch"]
+  # CronJobs have no subresource for suspend, so it is set by patching the CronJob.
+  - apiGroups: ["batch"]
+    resources: ["cronjobs"]
+    verbs: ["get", "list", "watch", "patch"]
 {{- if .Values.watchNamespaces }}
 {{- range .Values.watchNamespaces }}
 ---

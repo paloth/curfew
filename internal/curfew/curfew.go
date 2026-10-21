@@ -21,12 +21,14 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv1 "k8s.io/api/autoscaling/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
@@ -39,7 +41,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
-// Run starts the controllers for Deployments and StatefulSets and blocks until SIGINT/SIGTERM.
+// Run starts the controllers for Deployments, StatefulSets and CronJobs and blocks until SIGINT/SIGTERM.
 func Run() error {
 	ctrl.SetLogger(logr.FromSlogHandler(logs.Logger.Handler()))
 
@@ -85,6 +87,7 @@ func Run() error {
 	}{
 		{"Deployment", func() client.Object { return &appsv1.Deployment{} }, func() client.ObjectList { return &appsv1.DeploymentList{} }},
 		{"StatefulSet", func() client.Object { return &appsv1.StatefulSet{} }, func() client.ObjectList { return &appsv1.StatefulSetList{} }},
+		{"CronJob", func() client.Object { return &batchv1.CronJob{} }, func() client.ObjectList { return &batchv1.CronJobList{} }},
 	} {
 		r := &reconciler{
 			client:    mgr.GetClient(),
@@ -228,20 +231,20 @@ func (r *reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 
 	span.SetAttributes(attribute.Bool("asleep", asleep), attribute.Bool("sleeping", sleeping))
 
-	scale := &autoscalingv1.Scale{}
-	if err := r.client.SubResource("scale").Get(ctx, obj, scale); err != nil {
+	current, set, err := r.current(ctx, obj)
+	if err != nil {
 		return ctrl.Result{}, err
 	}
 
 	switch {
-	case asleep && scale.Spec.Replicas > 0:
+	case asleep && current > 0:
 		// Save before scaling: a failed scale is retried, a failed save changes nothing.
-		state.Data[key] = strconv.Itoa(int(scale.Spec.Replicas))
+		state.Data[key] = strconv.Itoa(int(current))
 		if err := r.saveState(ctx, state); err != nil {
 			return ctrl.Result{}, err
 		}
-		log.Info("Scaling down", "replicas", scale.Spec.Replicas)
-		if err := r.scaleTo(ctx, obj, scale, 0); err != nil {
+		log.Info("Scaling down", "replicas", current)
+		if err := r.scaleTo(ctx, set, current, 0); err != nil {
 			return ctrl.Result{}, err
 		}
 	case !asleep && sleeping:
@@ -254,7 +257,7 @@ func (r *reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 		} else {
 			// Scale before forgetting: a failed delete just repeats the same scale.
 			log.Info("Waking up", "replicas", replicas)
-			if err := r.scaleTo(ctx, obj, scale, int32(replicas)); err != nil {
+			if err := r.scaleTo(ctx, set, current, int32(replicas)); err != nil {
 				return ctrl.Result{}, err
 			}
 		}
@@ -299,15 +302,39 @@ func (r *reconciler) saveState(ctx context.Context, state *corev1.ConfigMap) (er
 	return r.client.Update(ctx, state)
 }
 
-func (r *reconciler) scaleTo(ctx context.Context, obj client.Object, scale *autoscalingv1.Scale, replicas int32) (err error) {
+// current returns how many replicas obj runs, and a function that sets them. A CronJob counts as
+// 1 while it runs and 0 while suspended; Deployments and StatefulSets go through /scale.
+func (r *reconciler) current(ctx context.Context, obj client.Object) (int32, func(context.Context, int32) error, error) {
+	if cj, ok := obj.(*batchv1.CronJob); ok {
+		running := int32(1)
+		if ptr.Deref(cj.Spec.Suspend, false) {
+			running = 0
+		}
+		return running, func(ctx context.Context, replicas int32) error {
+			patch := client.MergeFrom(cj.DeepCopy())
+			cj.Spec.Suspend = ptr.To(replicas == 0)
+			return r.client.Patch(ctx, cj, patch)
+		}, nil
+	}
+
+	scale := &autoscalingv1.Scale{}
+	if err := r.client.SubResource("scale").Get(ctx, obj, scale); err != nil {
+		return 0, nil, err
+	}
+	return scale.Spec.Replicas, func(ctx context.Context, replicas int32) error {
+		scale.Spec.Replicas = replicas
+		return r.client.SubResource("scale").Update(ctx, obj, client.WithSubResourceBody(scale))
+	}, nil
+}
+
+func (r *reconciler) scaleTo(ctx context.Context, set func(context.Context, int32) error, from, to int32) (err error) {
 	ctx, span := tracer.Start(ctx, "Scale", trace.WithAttributes(
-		attribute.Int("from", int(scale.Spec.Replicas)),
-		attribute.Int("to", int(replicas)),
+		attribute.Int("from", int(from)),
+		attribute.Int("to", int(to)),
 	))
 	defer func() { endSpan(span, err) }()
 
-	scale.Spec.Replicas = replicas
-	return r.client.SubResource("scale").Update(ctx, obj, client.WithSubResourceBody(scale))
+	return set(ctx, to)
 }
 
 // endSpan marks the span as failed when err is set, then ends it.

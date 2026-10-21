@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Curfew is a Kubernetes operator that scales workloads (Deployments and StatefulSets) to zero and back based on cron schedule annotations. The project uses Go, Cobra for the CLI, and controller-runtime.
+Curfew is a Kubernetes operator that scales workloads (Deployments and StatefulSets) to zero, and suspends CronJobs, based on cron schedule annotations. The project uses Go, Cobra for the CLI, and controller-runtime.
 
 ## Development Commands
 
@@ -58,7 +58,7 @@ Runs in-cluster only, built on controller-runtime (`internal/curfew`), with lead
   - `curfew/timezone`: IANA zone, default UTC
 - A namespace can carry the same annotations to schedule all its workloads, plus `curfew/exclude-kinds` and `curfew/exclude-labels`; a workload's own `curfew/sleep` always wins (`scheduleFor` in `internal/curfew/schedule.go`). Namespace annotation changes re-reconcile the namespace's workloads (`workloadsIn`).
 - Namespaces starting with `kube-` are ignored (`scheduleFor`, `scheduled`).
-- Scaling goes only through the `/scale` subresource; the ClusterRole has no write on the workloads themselves.
+- Deployments and StatefulSets scale only through the `/scale` subresource; CronJobs are suspended by patching `spec.suspend` (no subresource exists), counted as 1 replica running / 0 suspended (`current` in `internal/curfew/curfew.go`).
 - Original replica counts live in the `curfew-state` ConfigMap in the operator's namespace (`POD_NAMESPACE`), keyed `<kind>.<namespace>.<name>`.
 - Each reconcile requeues itself at the next sleep or wake time; removing the annotations wakes the workload.
 - Health probes: `:9090/healthz` and `/readyz`.

@@ -1,6 +1,6 @@
 # curfew
 
-A Kubernetes operator that scales Deployments and StatefulSets to zero on a cron schedule and back up again. Use it to switch off non-production workloads at night and on weekends.
+A Kubernetes operator that scales Deployments and StatefulSets to zero, and suspends CronJobs, on a cron schedule, then brings them back. Use it to switch off non-production workloads at night and on weekends.
 
 You opt a workload in with two annotations: when to sleep, and when to wake. curfew remembers the replica count before scaling down and restores it on wake-up.
 
@@ -30,11 +30,11 @@ Main values (`helm/values.yaml`):
 | `networkPolicy.apiServerPorts` | `[443, 6443]` | Ports the API server listens on |
 | `tracing.endpoint` | `""` | OTLP HTTP `host:port` for traces. Empty disables tracing. |
 | `tracing.insecure` | `false` | Send traces over plain HTTP instead of TLS |
-| `resources` | 10m CPU, 64Mi request, 256Mi limit | The operator caches every Deployment and StatefulSet it watches. Raise memory on big clusters. |
+| `resources` | 10m CPU, 64Mi request, 256Mi limit | The operator caches every Deployment, StatefulSet and CronJob it watches. Raise memory on big clusters. |
 
 ## Usage
 
-Add the annotations to a Deployment or StatefulSet:
+Add the annotations to a Deployment, StatefulSet or CronJob:
 
 ```yaml
 apiVersion: apps/v1
@@ -68,7 +68,7 @@ It then schedules its next check for exactly that time. Adding the annotations d
 
 ### Namespace schedule
 
-Put the same annotations on a namespace to apply them to every Deployment and StatefulSet in it:
+Put the same annotations on a namespace to apply them to every Deployment, StatefulSet and CronJob in it:
 
 ```yaml
 apiVersion: v1
@@ -86,7 +86,7 @@ metadata:
 A workload in that namespace follows the first rule that applies:
 
 1. **Its own rule:** a workload with its own `curfew/sleep` uses its own `curfew/sleep`, `curfew/wake` and `curfew/timezone`, and ignores the namespace.
-2. **Excluded:** the namespace's rule is skipped for a workload whose kind is listed in `curfew/exclude-kinds` (`Deployment`, `StatefulSet`), or whose labels match an entry of `curfew/exclude-labels`. An entry is `key=value` (that exact value) or `key` (any value); one matching entry is enough.
+2. **Excluded:** the namespace's rule is skipped for a workload whose kind is listed in `curfew/exclude-kinds` (`Deployment`, `StatefulSet`, `CronJob`), or whose labels match an entry of `curfew/exclude-labels`. An entry is `key=value` (that exact value) or `key` (any value); one matching entry is enough.
 3. **The namespace's rule.**
 
 Changing or removing the namespace annotations applies at once. Workloads that are no longer covered, because the schedule was removed or they became excluded, are woken up.
@@ -102,6 +102,7 @@ Changing or removing the namespace annotations applies at once. Workloads that a
 - **Deleting a sleeping workload** removes its entry.
 - **Scaling by hand during sleep:** if you scale a sleeping workload up, curfew saves the new count and scales it back to 0. Remove the annotations to keep it up.
 - **Already at 0 at sleep time:** nothing is stored, and the workload stays at 0 on wake.
+- **CronJobs** are suspended (`spec.suspend: true`) instead of scaled, so they start no new Jobs while asleep; Jobs already running are not stopped. A CronJob counts as 1 replica while it runs and 0 while suspended, so one you suspended yourself stays suspended after wake.
 - **Excluded namespaces:** workloads in namespaces starting with `kube-` are ignored, even when annotated, and so are those namespaces' own annotations.
 - **Invalid annotations** (a bad cron expression or time zone) are logged as errors and the workload is left as it is. Fixing the annotation triggers a new check.
 - **Invalid stored counts** (negative, not a number, or too large) are logged and dropped. The workload is not scaled.
@@ -114,8 +115,9 @@ The chart creates:
 - **A ClusterRole:**
   - `get`, `list`, `watch` on Deployments and StatefulSets
   - `get`, `update`, `patch` on their `/scale` subresource only
+  - `get`, `list`, `watch`, `patch` on CronJobs
 
-  curfew cannot change anything on your workloads except the replica count.
+  For Deployments and StatefulSets, curfew can change nothing but the replica count. CronJobs have no subresource for `suspend`, so curfew needs `patch` on the CronJob itself; it only ever patches `spec.suspend`.
 - **The binding for that role:**
   - `watchNamespaces` empty: a ClusterRoleBinding, so curfew acts in the whole cluster.
   - `watchNamespaces` set: one RoleBinding per listed namespace, so curfew acts only there. It also watches only those namespaces. Each one must exist before you install.
