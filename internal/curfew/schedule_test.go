@@ -54,3 +54,54 @@ func TestScheduleFor(t *testing.T) {
 		})
 	}
 }
+
+func TestDesiredAwakeUntil(t *testing.T) {
+	now := paris(t, "2026-10-19 22:00") // asleep until 08:00
+	with := func(until string) map[string]string {
+		a := maps.Clone(schedule)
+		if until != "" {
+			a[values.AwakeUntilAnnotation] = until
+		}
+		return a
+	}
+	deploy := func(annotations map[string]string) *appsv1.Deployment {
+		return &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "shop", Annotations: annotations}}
+	}
+	ns := func(annotations map[string]string) *corev1.Namespace {
+		return &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop", Annotations: annotations}}
+	}
+	nsOverride := map[string]string{values.AwakeUntilAnnotation: "2026-10-19T23:30:00+02:00"}
+
+	tests := []struct {
+		name       string
+		obj        metav1.Object
+		ns         *corev1.Namespace
+		wantAsleep bool
+		wantNext   string
+	}{
+		{"no override", deploy(with("")), nil, true, "2026-10-20 08:00"},
+		{"kept awake until midnight", deploy(with("2026-10-19T22:00:00Z")), nil, false, "2026-10-20 00:00"},
+		{"override past the wake time", deploy(with("2026-10-20T12:00:00+02:00")), nil, false, "2026-10-20 08:00"},
+		{"expired override", deploy(with("2026-10-19T12:00:00Z")), nil, true, "2026-10-20 08:00"},
+		{"namespace override, own schedule", deploy(with("")), ns(nsOverride), false, "2026-10-19 23:30"},
+		{"own override wins", deploy(with("2026-10-19T12:00:00Z")), ns(nsOverride), true, "2026-10-20 08:00"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			asleep, next, err := desired(tt.obj, "Deployment", tt.ns, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if asleep != tt.wantAsleep || !next.Equal(paris(t, tt.wantNext)) {
+				t.Errorf("desired() = %v, %v; want %v, %s", asleep, next, tt.wantAsleep, tt.wantNext)
+			}
+		})
+	}
+
+	if _, _, err := desired(deploy(with("tomorrow")), "Deployment", nil, now); err == nil {
+		t.Error("invalid curfew/awake-until: want error")
+	}
+	if asleep, _, _ := desired(deploy(nil), "Deployment", ns(nsOverride), now); asleep {
+		t.Error("no schedule: want awake")
+	}
+}
