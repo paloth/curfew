@@ -57,6 +57,7 @@ Runs in-cluster only, built on controller-runtime (`internal/curfew`), with lead
   - `curfew/wake`: cron expression, when to restore
   - `curfew/timezone`: IANA zone, default UTC
 - A namespace can carry the same annotations to schedule all its workloads, plus `curfew/exclude-kinds` and `curfew/exclude-labels`; a workload's own `curfew/sleep` always wins (`scheduleFor` in `internal/curfew/schedule.go`). Namespace annotation changes re-reconcile the namespace's workloads (`workloadsIn`).
+- `curfew/wave` (integer, default 0, negative allowed) orders workloads within a namespace: on sleep a workload waits until lower waves going to sleep have no pods (or running Jobs) left, on wake until higher waves waking up are ready; it polls every 10s and gives up after 10 min (`internal/curfew/wave.go`).
 - Namespaces starting with `kube-` are ignored (`scheduleFor`, `scheduled`).
 - Deployments and StatefulSets scale only through the `/scale` subresource; CronJobs are suspended by patching `spec.suspend` (no subresource exists), counted as 1 replica running / 0 suspended (`current` in `internal/curfew/curfew.go`).
 - Original replica counts live in the `curfew-state` ConfigMap in the operator's namespace (`POD_NAMESPACE`), keyed `<kind>.<namespace>.<name>`.

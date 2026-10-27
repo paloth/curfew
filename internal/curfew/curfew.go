@@ -90,13 +90,14 @@ func Run() error {
 		{"CronJob", func() client.Object { return &batchv1.CronJob{} }, func() client.ObjectList { return &batchv1.CronJobList{} }},
 	} {
 		r := &reconciler{
-			client:    mgr.GetClient(),
-			reader:    mgr.GetAPIReader(),
-			namespace: namespace,
-			kind:      w.kind,
-			newObj:    w.newObj,
-			newList:   w.newList,
-			now:       time.Now,
+			client:       mgr.GetClient(),
+			reader:       mgr.GetAPIReader(),
+			namespace:    namespace,
+			kind:         w.kind,
+			newObj:       w.newObj,
+			newList:      w.newList,
+			now:          time.Now,
+			waitingSince: map[string]time.Time{},
 		}
 		err := ctrl.NewControllerManagedBy(mgr).
 			For(w.newObj(), builder.WithPredicates(
@@ -180,6 +181,9 @@ type reconciler struct {
 	newObj    func() client.Object
 	newList   func() client.ObjectList
 	now       func() time.Time
+	// waitingSince is when each workload started waiting for another wave; one reconcile runs at a time.
+	// shortcut: in memory, a leader change restarts the wave timeout; persist it in curfew-state if that matters.
+	waitingSince map[string]time.Time
 }
 
 func (r *reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Result, err error) {
@@ -234,6 +238,18 @@ func (r *reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 	current, set, err := r.current(ctx, obj)
 	if err != nil {
 		return ctrl.Result{}, err
+	}
+
+	if asleep && current > 0 || !asleep && sleeping {
+		blocker, err := r.waveBlocker(ctx, obj, ns, asleep, state.Data)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if r.waiting(log, key, blocker) {
+			return ctrl.Result{RequeueAfter: wavePoll}, nil
+		}
+	} else {
+		delete(r.waitingSince, key)
 	}
 
 	switch {

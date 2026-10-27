@@ -13,6 +13,10 @@ rules:
   - apiGroups: ["batch"]
     resources: ["cronjobs"]
     verbs: ["get", "list", "watch", "patch"]
+  # Waves wait for the pods of an earlier wave to be gone.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
 {{- if .Values.watchNamespaces }}
 {{- range .Values.watchNamespaces }}
 ---

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end test against a deployed curfew (see `just e2e`). About 5 minutes:
 #   1. a Deployment, a StatefulSet and a CronJob sleep and wake on real cron times, a few minutes from now
+#      (the StatefulSet in wave 1, so it waits for the Deployment)
 #   2. a sleeping Deployment wakes up as soon as its annotations are removed
 set -euo pipefail
 
@@ -84,6 +85,7 @@ metadata:
   annotations:
     curfew/sleep: "$sleep_m $sleep_h * * *"
     curfew/wake: "$wake_m $wake_h * * *"
+    curfew/wave: "1"
 spec:
   replicas: 2
   serviceName: db

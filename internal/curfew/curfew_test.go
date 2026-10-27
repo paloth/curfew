@@ -142,13 +142,14 @@ var (
 
 func newTestReconciler(c client.Client, now *time.Time) *reconciler {
 	return &reconciler{
-		client:    c,
-		reader:    c,
-		namespace: "curfew",
-		kind:      "Deployment",
-		newObj:    func() client.Object { return &appsv1.Deployment{} },
-		newList:   func() client.ObjectList { return &appsv1.DeploymentList{} },
-		now:       func() time.Time { return *now },
+		client:       c,
+		reader:       c,
+		namespace:    "curfew",
+		kind:         "Deployment",
+		newObj:       func() client.Object { return &appsv1.Deployment{} },
+		newList:      func() client.ObjectList { return &appsv1.DeploymentList{} },
+		now:          func() time.Time { return *now },
+		waitingSince: map[string]time.Time{},
 	}
 }
 
@@ -420,4 +421,104 @@ func TestReconcileSuspendsCronJob(t *testing.T) {
 	now = paris(t, "2026-10-20 08:00")
 	check("report", false, "")
 	check("paused", true, "")
+}
+
+func TestReconcileWaves(t *testing.T) {
+	logs.InitLogger(false)
+	ctx := context.Background()
+
+	withWave := func(w string) map[string]string {
+		a := maps.Clone(schedule)
+		a[values.WaveAnnotation] = w
+		return a
+	}
+	selector := func(app string) *metav1.LabelSelector {
+		return &metav1.LabelSelector{MatchLabels: map[string]string{"app": app}}
+	}
+	report := &batchv1.CronJob{
+		ObjectMeta: metav1.ObjectMeta{Name: "report", Namespace: "shop", Annotations: withWave("-1")},
+		Spec:       batchv1.CronJobSpec{Schedule: "*/5 * * * *", Suspend: ptr.To(false)},
+		Status:     batchv1.CronJobStatus{Active: []corev1.ObjectReference{{Name: "report-1"}}},
+	}
+	app := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "shop", Annotations: schedule},
+		Spec:       appsv1.DeploymentSpec{Replicas: ptr.To(int32(2)), Selector: selector("app")},
+	}
+	db := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "shop", Annotations: withWave("1")},
+		Spec:       appsv1.StatefulSetSpec{Replicas: ptr.To(int32(2)), Selector: selector("db")},
+	}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "app-1", Namespace: "shop", Labels: map[string]string{"app": "app"}}}
+	c := fake.NewClientBuilder().WithObjects(report, app, db, pod).Build()
+
+	now := paris(t, "2026-10-19 22:00")
+	rApp := newTestReconciler(c, &now)
+	rDb := newTestReconciler(c, &now)
+	rDb.kind, rDb.newObj = "StatefulSet", func() client.Object { return &appsv1.StatefulSet{} }
+	rCron := newTestReconciler(c, &now)
+	rCron.kind, rCron.newObj = "CronJob", func() client.Object { return &batchv1.CronJob{} }
+
+	// step reconciles name and checks whether it waited for another wave.
+	step := func(r *reconciler, name string, wantWait bool) {
+		t.Helper()
+		res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "shop", Name: name}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if waited := res.RequeueAfter == wavePoll; waited != wantWait {
+			t.Errorf("%s at %s: waited = %v, want %v", name, now.Format("15:04"), waited, wantWait)
+		}
+	}
+	updateStatus := func(o client.Object, change func()) {
+		t.Helper()
+		if err := c.Get(ctx, client.ObjectKeyFromObject(o), o); err != nil {
+			t.Fatal(err)
+		}
+		change()
+		if err := c.Status().Update(ctx, o); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Sleep goes up the waves: report (-1), then app (0), then db (1).
+	step(rApp, "app", true) // report still runs
+	step(rCron, "report", false)
+	step(rApp, "app", true) // report suspended, but its Job still runs
+	updateStatus(report, func() { report.Status.Active = nil })
+	step(rApp, "app", false)
+	step(rDb, "db", true) // app is at 0, but its pod is still terminating
+	if err := c.Delete(ctx, pod); err != nil {
+		t.Fatal(err)
+	}
+	step(rDb, "db", false)
+	if err := c.Get(ctx, client.ObjectKeyFromObject(db), db); err != nil {
+		t.Fatal(err)
+	}
+	if *db.Spec.Replicas != 0 {
+		t.Fatalf("db replicas = %d, want 0", *db.Spec.Replicas)
+	}
+
+	// Wake goes down: db, then app, then report.
+	now = paris(t, "2026-10-20 08:00")
+	step(rApp, "app", true) // db still asleep
+	step(rDb, "db", false)
+	step(rApp, "app", true) // db not ready yet
+	updateStatus(db, func() { db.Status.ReadyReplicas = 2 })
+	step(rApp, "app", false)
+	step(rCron, "report", true) // app not ready yet
+	now = now.Add(waveTimeout + time.Minute)
+	step(rCron, "report", false) // gives up waiting
+
+	if err := c.Get(ctx, client.ObjectKeyFromObject(report), report); err != nil {
+		t.Fatal(err)
+	}
+	if ptr.Deref(report.Spec.Suspend, false) {
+		t.Error("report still suspended after wake")
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(app), app); err != nil {
+		t.Fatal(err)
+	}
+	if *app.Spec.Replicas != 2 {
+		t.Errorf("app replicas = %d, want 2", *app.Spec.Replicas)
+	}
 }

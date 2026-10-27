@@ -11,5 +11,9 @@ Or annotate a namespace to schedule all its workloads, optionally excluding some
   curfew/exclude-kinds: "StatefulSet"
   curfew/exclude-labels: "tier=data,keep-alive"
 
+Order workloads in a namespace with waves (lower sleeps first, wakes last; default 0):
+
+  curfew/wave: "1"
+
 Sleeping workloads and their original replicas:
   kubectl get configmap curfew-state -n {{ .Release.Namespace }} -o yaml
