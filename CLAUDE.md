@@ -48,6 +48,7 @@ No config file. The operator reads:
 - `POD_NAMESPACE` env (required): where the state ConfigMap and leader lease live (set by the chart via the downward API)
 - `JAEGER_ENDPOINT` env (optional): enables tracing (Helm value `tracing.endpoint`)
 - `OTEL_EXPORTER_OTLP_INSECURE=true` env (optional): plain HTTP for traces instead of TLS (Helm value `tracing.insecure`)
+- `DRY_RUN=true` env (optional): workload writes are sent with dryRun=All, curfew-state is still written, waves don't wait (Helm value `dryRun`)
 - `WATCH_NAMESPACES` env (optional, comma-separated): only watch these namespaces (Helm value `watchNamespaces`, which also swaps the ClusterRoleBinding for per-namespace RoleBindings)
 
 ### Operator

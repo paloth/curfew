@@ -522,3 +522,49 @@ func TestReconcileWaves(t *testing.T) {
 		t.Errorf("app replicas = %d, want 2", *app.Spec.Replicas)
 	}
 }
+
+func TestReconcileDryRun(t *testing.T) {
+	logs.InitLogger(false)
+	ctx := context.Background()
+
+	db := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "shop", Annotations: maps.Clone(schedule)},
+		Spec:       appsv1.StatefulSetSpec{Replicas: ptr.To(int32(2))},
+	}
+	db.Annotations[values.WaveAnnotation] = "1"
+	app := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "shop", Annotations: schedule},
+		Spec:       appsv1.DeploymentSpec{Replicas: ptr.To(int32(3))},
+	}
+	c := fake.NewClientBuilder().WithObjects(app, db).Build()
+	now := paris(t, "2026-10-19 22:00")
+	r := newTestReconciler(c, &now)
+	r.kind, r.newObj, r.dryRun = "StatefulSet", func() client.Object { return &appsv1.StatefulSet{} }, true
+
+	check := func(wantStored string) {
+		t.Helper()
+		res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(db)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.RequeueAfter == wavePoll {
+			t.Error("waited for app's wave in dry-run")
+		}
+		got := &appsv1.StatefulSet{}
+		if err := c.Get(ctx, client.ObjectKeyFromObject(db), got); err != nil {
+			t.Fatal(err)
+		}
+		if *got.Spec.Replicas != 2 {
+			t.Errorf("replicas = %d, want 2 untouched", *got.Spec.Replicas)
+		}
+		state := &corev1.ConfigMap{}
+		_ = c.Get(ctx, stateKey, state)
+		if v := state.Data["statefulset.shop.db"]; v != wantStored {
+			t.Errorf("stored = %q, want %q", v, wantStored)
+		}
+	}
+
+	check("2")
+	now = paris(t, "2026-10-20 08:00")
+	check("")
+}
