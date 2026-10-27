@@ -59,6 +59,7 @@ Runs in-cluster only, built on controller-runtime (`internal/curfew`), with lead
   - `curfew/wake`: cron expression, when to restore
   - `curfew/timezone`: IANA zone, default UTC
 - A namespace can carry the same annotations to schedule all its workloads, plus `curfew/exclude-kinds` and `curfew/exclude-labels`; a workload's own `curfew/sleep` always wins (`scheduleFor` in `internal/curfew/schedule.go`). Namespace annotation changes re-reconcile the namespace's workloads (`workloadsIn`).
+- `curfew/skip-dates` (comma-separated `YYYY-MM-DD`, part of the schedule's annotations) skips sleep and wake times on those dates, read in the schedule's time zone (`evaluate`).
 - `curfew/awake-until` (RFC 3339) on a workload, else its namespace, keeps it awake until then (`desired` in `internal/curfew/schedule.go`, which Reconcile and waves both use).
 - `curfew/wave` (integer, default 0, negative allowed) orders workloads within a namespace: on sleep a workload waits until lower waves going to sleep have no pods (or running Jobs) left, on wake until higher waves waking up are ready; it polls every 10s and gives up after 10 min (`internal/curfew/wave.go`).
 - Namespaces starting with `kube-` are ignored (`scheduleFor`, `scheduled`).
