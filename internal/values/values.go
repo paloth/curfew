@@ -7,6 +7,7 @@ const (
 	ExcludeKindsAnnotation  = "curfew/exclude-kinds"
 	ExcludeLabelsAnnotation = "curfew/exclude-labels"
 	WaveAnnotation          = "curfew/wave"
+	AwakeUntilAnnotation    = "curfew/awake-until"
 	NsExcludePrefix         = "kube-"
 	StateConfigMap          = "curfew-state"
 )

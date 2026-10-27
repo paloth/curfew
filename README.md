@@ -55,6 +55,7 @@ metadata:
 | `curfew/sleep` | yes | Standard 5-field cron (`minute hour day-of-month month day-of-week`) or a descriptor like `@daily` |
 | `curfew/wake` | yes | Same as `sleep` |
 | `curfew/timezone` | no | IANA time zone name, e.g. `America/New_York`. Default `UTC`. |
+| `curfew/awake-until` | no | RFC 3339 time, e.g. `2026-10-28T08:00:00+01:00`. Stay awake until then (see [Keep awake](#keep-awake)). |
 
 Both schedules are read in the given time zone.
 
@@ -93,6 +94,20 @@ A workload in that namespace follows the first rule that applies:
 3. **The namespace's rule.**
 
 Changing or removing the namespace annotations applies at once. Workloads that are no longer covered, because the schedule was removed or they became excluded, are woken up.
+
+### Keep awake
+
+Working late? Keep a workload, or a whole namespace, awake without touching its schedule:
+
+```bash
+kubectl annotate deployment my-app curfew/awake-until=2026-10-28T08:00:00+01:00
+kubectl annotate namespace staging curfew/awake-until=2026-10-28T08:00:00+01:00
+```
+
+- Until that time the workload counts as awake: a sleeping one wakes right away, and nothing goes to sleep. After it, the schedule applies again.
+- A namespace's `curfew/awake-until` covers all its scheduled workloads, those with their own schedule included. A workload's own `curfew/awake-until` wins over the namespace's.
+- The time needs a zone (`Z` or an offset). An invalid value is logged and the workload is left as it is, as with other invalid annotations.
+- An expired annotation does nothing. curfew does not remove it.
 
 ### Waves
 
@@ -245,7 +260,7 @@ just colima-undeploy   # uninstall (the curfew-state ConfigMap is kept)
 - a Deployment and a StatefulSet sleep and wake on real cron times a few minutes ahead,
 - their counts are stored and then cleared,
 - the StatefulSet, in wave 1, waits for the Deployment's pods to be gone,
-- removing the annotations wakes a workload right away.
+- `curfew/awake-until` wakes a sleeping workload, and removing the annotations wakes it right away.
 
 It runs in a throwaway `curfew-e2e` namespace. `KUBE_CONTEXT` (default `colima`) selects another cluster.
 

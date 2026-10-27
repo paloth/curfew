@@ -362,6 +362,7 @@ func TestNamespaceScheduleChanged(t *testing.T) {
 	scheduledNs := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop", Annotations: schedule}}
 	relabelled := scheduledNs.DeepCopy()
 	relabelled.Labels = map[string]string{"team": "a"}
+	overridden := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop", Annotations: map[string]string{values.AwakeUntilAnnotation: "2026-10-20T08:00:00Z"}}}
 
 	tests := []struct {
 		name     string
@@ -372,6 +373,7 @@ func TestNamespaceScheduleChanged(t *testing.T) {
 		{"schedule removed", scheduledNs, plain, true},
 		{"only labels changed", scheduledNs, relabelled, false},
 		{"never scheduled", plain, plain, false},
+		{"awake-until added without a schedule", plain, overridden, true},
 	}
 	for _, tt := range tests {
 		if got := namespaceScheduleChanged.Update(event.UpdateEvent{ObjectOld: tt.old, ObjectNew: tt.new}); got != tt.want {

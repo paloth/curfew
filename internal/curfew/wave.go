@@ -78,11 +78,10 @@ func (r *reconciler) goesBefore(peer client.Object, kind string, ns *corev1.Name
 	if err != nil || asleep && w >= mine || !asleep && w <= mine {
 		return false
 	}
-	sched := scheduleFor(peer, kind, ns)
-	if sched == nil {
+	if scheduleFor(peer, kind, ns) == nil {
 		return false
 	}
-	peerAsleep, _, err := evaluate(sched, r.now())
+	peerAsleep, _, err := desired(peer, kind, ns, r.now())
 	return err == nil && peerAsleep == asleep
 }
 
