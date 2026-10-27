@@ -619,3 +619,33 @@ func TestReconcileDryRun(t *testing.T) {
 	now = paris(t, "2026-10-20 08:00")
 	check("")
 }
+
+func TestPruneState(t *testing.T) {
+	logs.InitLogger(false)
+	ctx := context.Background()
+
+	app := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "shop"}}
+	dotted := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "my.app", Namespace: "shop"}}
+	state := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Namespace: stateKey.Namespace, Name: stateKey.Name},
+		Data: map[string]string{
+			"deployment.shop.app":    "3", // still there
+			"deployment.shop.my.app": "1", // dots in the name
+			"deployment.shop.gone":   "5", // deleted while curfew was down
+			"widget.shop.w":          "2", // a kind no longer configured
+		},
+	}
+	c := fake.NewClientBuilder().WithObjects(app, dotted, state).Build()
+	now := time.Now()
+
+	if err := newTestReconciler(c, &now).pruneState(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, stateKey, state); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"deployment.shop.app": "3", "deployment.shop.my.app": "1", "widget.shop.w": "2"}
+	if !maps.Equal(state.Data, want) {
+		t.Errorf("state = %v, want %v", state.Data, want)
+	}
+}

@@ -32,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -40,6 +41,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -116,6 +118,18 @@ func Run() error {
 		if err != nil {
 			return err
 		}
+	}
+
+	// Once, on the leader: a workload deleted while curfew was down sends no delete event.
+	pruner := &reconciler{client: mgr.GetClient(), reader: mgr.GetAPIReader(), namespace: namespace, kinds: kinds}
+	err = mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+		if err := pruner.pruneState(ctx); err != nil {
+			ctrl.Log.Error(err, "Cannot prune curfew-state")
+		}
+		return nil
+	}))
+	if err != nil {
+		return err
 	}
 
 	return mgr.Start(ctrl.SetupSignalHandler())
@@ -352,6 +366,36 @@ func (r *reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 		return ctrl.Result{}, nil
 	}
 	return ctrl.Result{RequeueAfter: next.Sub(r.now())}, nil
+}
+
+// pruneState drops curfew-state entries whose workload no longer exists. Otherwise a new workload
+// with the same name would get the old replica count at wake time.
+func (r *reconciler) pruneState(ctx context.Context) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		state, err := r.loadState(ctx)
+		if err != nil {
+			return err
+		}
+		pruned := false
+		for key := range state.Data {
+			kind, rest, _ := strings.Cut(key, ".")
+			ns, name, _ := strings.Cut(rest, ".")
+			i := slices.IndexFunc(r.kinds, func(k workloadKind) bool { return strings.ToLower(k.kind) == kind })
+			if i < 0 {
+				continue // a kind no longer configured: cannot tell
+			}
+			// Uncached: this runs before the cache is known to be synced. Other errors keep the entry.
+			if err := r.reader.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, r.kinds[i].newObj()); apierrors.IsNotFound(err) {
+				ctrl.Log.Info("Dropping the stored replicas of a deleted workload", "key", key)
+				delete(state.Data, key)
+				pruned = true
+			}
+		}
+		if !pruned {
+			return nil
+		}
+		return r.saveState(ctx, state)
+	})
 }
 
 // loadState returns the state ConfigMap, or an unsaved empty one if it does not exist yet.

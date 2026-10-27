@@ -191,7 +191,7 @@ The count is kept in memory, so a restart of the operator starts it over. A scal
   ```
 - **Order of writes:** on sleep, the count is saved before scaling to 0. On wake, the workload is scaled up before its entry is removed. A failure in between is retried and never loses the original count.
 - **Removing the annotations** wakes the workload immediately if it was asleep.
-- **Deleting a sleeping workload** removes its entry.
+- **Deleting a sleeping workload** removes its entry. If it was deleted while curfew was down, the entry is dropped when curfew starts.
 - **Scaling by hand during sleep:** if you scale a sleeping workload up, curfew saves the new count and scales it back to 0. Remove the annotations, or set [`curfew/awake-until`](#keep-awake), to keep it up. If this happens 3 times in one sleep window, curfew logs that another controller is likely fighting it (see [Other controllers](#other-controllers)).
 - **Already at 0 at sleep time:** nothing is stored, and the workload stays at 0 on wake.
 - **CronJobs** are suspended (`spec.suspend: true`) instead of scaled, so they start no new Jobs while asleep; Jobs already running are not stopped. A CronJob counts as 1 replica while it runs and 0 while suspended, so one you suspended yourself stays suspended after wake.

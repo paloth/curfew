@@ -66,7 +66,7 @@ Runs in-cluster only, built on controller-runtime (`internal/curfew`), with lead
 - A sleeping workload found scaled up again is scaled back to 0 and counted (`scaledUpWhileAsleep` in `internal/curfew/conflict.go`); at 3 in one sleep window curfew logs that another controller is fighting it.
 - Namespaces starting with `kube-` are ignored (`scheduleFor`, `scheduled`).
 - Deployments, StatefulSets and extra kinds scale only through the `/scale` subresource (extra kinds through an unstructured body, `unstructuredScale`); CronJobs are suspended by patching `spec.suspend` (no subresource exists), counted as 1 replica running / 0 suspended (`current` in `internal/curfew/curfew.go`).
-- Original replica counts live in the `curfew-state` ConfigMap in the operator's namespace (`POD_NAMESPACE`), keyed `<kind>.<namespace>.<name>`.
+- Original replica counts live in the `curfew-state` ConfigMap in the operator's namespace (`POD_NAMESPACE`), keyed `<kind>.<namespace>.<name>`. On startup the leader drops entries whose workload no longer exists (`pruneState`).
 - Each reconcile requeues itself at the next sleep or wake time; removing the annotations wakes the workload.
 - Health probes: `:9090/healthz` and `/readyz`.
 
