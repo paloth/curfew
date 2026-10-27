@@ -100,11 +100,35 @@ func awakeUntil(obj metav1.Object, ns *corev1.Namespace) (time.Time, error) {
 	return time.Parse(time.RFC3339, strings.TrimSpace(v))
 }
 
+// skipDates parses curfew/skip-dates ("2026-12-24,2026-12-25") into a set of YYYY-MM-DD dates.
+func skipDates(list string) (map[string]bool, error) {
+	skip := map[string]bool{}
+	for d := range strings.SplitSeq(list, ",") {
+		if d = strings.TrimSpace(d); d == "" {
+			continue
+		}
+		if _, err := time.Parse(time.DateOnly, d); err != nil {
+			return nil, fmt.Errorf("%s: %w", values.SkipDatesAnnotation, err)
+		}
+		skip[d] = true
+	}
+	return skip, nil
+}
+
 // evaluate reports whether the workload should be asleep at now, and when that next changes.
+// Sleep and wake times falling on a curfew/skip-dates date are skipped.
 func evaluate(annotations map[string]string, now time.Time) (bool, time.Time, error) {
 	tz := annotations[values.TimezoneAnnotation]
 	if tz == "" {
 		tz = "UTC"
+	}
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		return false, time.Time{}, fmt.Errorf("%s: %w", values.TimezoneAnnotation, err)
+	}
+	skip, err := skipDates(annotations[values.SkipDatesAnnotation])
+	if err != nil {
+		return false, time.Time{}, err
 	}
 
 	next := map[string]time.Time{}
@@ -113,7 +137,13 @@ func evaluate(annotations map[string]string, now time.Time) (bool, time.Time, er
 		if err != nil {
 			return false, time.Time{}, fmt.Errorf("%s: %w", key, err)
 		}
-		if next[key] = sched.Next(now); next[key].IsZero() {
+		// Skipping both sleep and wake on a date keeps whichever state the day started in.
+		at := sched.Next(now)
+		for !at.IsZero() && skip[at.In(loc).Format(time.DateOnly)] {
+			y, m, d := at.In(loc).Date()
+			at = sched.Next(time.Date(y, m, d+1, 0, 0, 0, 0, loc).Add(-time.Second))
+		}
+		if next[key] = at; at.IsZero() {
 			return false, time.Time{}, fmt.Errorf("%s: never fires", key)
 		}
 	}

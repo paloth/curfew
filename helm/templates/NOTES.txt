@@ -5,6 +5,7 @@ Opt a Deployment, StatefulSet or CronJob in with annotations:
   curfew/sleep: "0 20 * * 1-5"     # cron: scale to 0
   curfew/wake: "0 8 * * 1-5"       # cron: restore replicas
   curfew/timezone: "Europe/Paris"  # optional, default UTC
+  curfew/skip-dates: "2026-12-24,2026-12-25"  # optional, no sleep or wake on these days
   curfew/awake-until: "2026-10-28T08:00:00+01:00"  # optional, skip sleep until then
 
 Or annotate a namespace to schedule all its workloads, optionally excluding some:
