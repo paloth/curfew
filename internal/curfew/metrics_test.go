@@ -2,6 +2,7 @@ package curfew
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"curfew/internal/logs"
@@ -110,5 +111,20 @@ func TestReconcileCountsScaleUpsWhileAsleep(t *testing.T) {
 	reconcile()
 	if len(r.scaledUp) != 0 {
 		t.Errorf("scaledUp = %v after wake, want empty", r.scaledUp)
+	}
+}
+
+func TestObserveStateConcurrent(t *testing.T) {
+	data := map[string]string{"deployment.shop.app": "2", "deployment.shop.web": "1", "statefulset.shop.db": "1"}
+	// Every controller recounts at once at sleep time; the result must not depend on interleaving.
+	for range 200 {
+		var wg sync.WaitGroup
+		for range 4 {
+			wg.Go(func() { observeState(data) })
+		}
+		wg.Wait()
+		if got := testutil.ToFloat64(sleepingWorkloads.WithLabelValues("shop", "deployment")); got != 2 {
+			t.Fatalf("sleeping deployments = %v, want 2", got)
+		}
 	}
 }

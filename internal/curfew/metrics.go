@@ -3,6 +3,7 @@ package curfew
 import (
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
 	appsv1 "k8s.io/api/apps/v1"
@@ -40,14 +41,25 @@ func init() {
 	metrics.Registry.MustRegister(sleepingWorkloads, scaleTotal, scaledUpTotal, freedCPU, freedMemory)
 }
 
+// observeStateMu serializes recounts: every controller recounts, and two interleaved ones would
+// both add to the same reset gauge.
+var observeStateMu sync.Mutex
+
 // observeState counts the curfew-state entries (<kind>.<namespace>.<name>) per namespace and kind.
 func observeState(data map[string]string) {
-	sleepingWorkloads.Reset()
+	counts := map[[2]string]float64{}
 	for key := range data {
 		if kind, rest, ok := strings.Cut(key, "."); ok {
 			ns, _, _ := strings.Cut(rest, ".")
-			sleepingWorkloads.WithLabelValues(ns, kind).Inc()
+			counts[[2]string{ns, kind}]++
 		}
+	}
+
+	observeStateMu.Lock()
+	defer observeStateMu.Unlock()
+	sleepingWorkloads.Reset()
+	for labels, n := range counts {
+		sleepingWorkloads.WithLabelValues(labels[0], labels[1]).Set(n)
 	}
 }
 
