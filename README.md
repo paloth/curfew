@@ -211,6 +211,7 @@ helm upgrade --install curfew helm/ -n curfew --set dryRun=true
 - Every scale and suspend is sent to the API server with `dryRun=All`: it is checked, permissions included, but not applied. Log lines carry `"dryRun":true`.
 - `curfew-state` is still written, so the logs show the wake-ups too. Turning dry run off mid-sleep is safe: the stored count matches the running replicas, and curfew scales them down.
 - Waves don't wait, since nothing really stops. curfew logs `Would wait for wave` and goes on.
+- [Metrics](#metrics) still count sleeping workloads, and `curfew_freed_*` shows what curfew *would* free: an estimate of the savings. Conflicts with [other controllers](#other-controllers) are not counted, since the replicas never went down.
 
 ## Permissions
 

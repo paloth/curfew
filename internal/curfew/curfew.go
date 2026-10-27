@@ -313,7 +313,8 @@ func (r *reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 
 	switch {
 	case asleep && current > 0:
-		if sleeping {
+		// In dry run the replicas never went down, so finding them up is no sign of a fight.
+		if sleeping && !r.dryRun {
 			r.scaledUpWhileAsleep(log, req.Namespace, key)
 		}
 		// Save before scaling: a failed scale is retried, a failed save changes nothing.
