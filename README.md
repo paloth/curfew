@@ -29,6 +29,8 @@ Main values (`helm/values.yaml`):
 | `watchNamespaces` | `[]` | Namespaces curfew may act in. Empty means the whole cluster. |
 | `networkPolicy.enabled` | `true` | Restricts the operator pod's network traffic |
 | `networkPolicy.apiServerPorts` | `[443, 6443]` | Ports the API server listens on |
+| `metrics.enabled` | `false` | Prometheus metrics on port 8080, with a Service (see [Metrics](#metrics)) |
+| `metrics.serviceMonitor` | `false` | Also create a ServiceMonitor (needs the Prometheus Operator) |
 | `tracing.endpoint` | `""` | OTLP HTTP `host:port` for traces. Empty disables tracing. |
 | `tracing.insecure` | `false` | Send traces over plain HTTP instead of TLS |
 | `resources` | 10m CPU, 64Mi request, 256Mi limit | The operator caches every Deployment, StatefulSet and CronJob it watches. Raise memory on big clusters. |
@@ -170,6 +172,29 @@ The chart creates:
 **Supply chain:**
 - Base images in the Dockerfile are pinned by digest.
 - Run `just vuln` (govulncheck) to scan dependencies for known vulnerabilities. `just check` includes it.
+
+## Metrics
+
+Set `metrics.enabled=true` to serve Prometheus metrics on port 8080, behind the `curfew-metrics` Service. Add `metrics.serviceMonitor=true` if you run the Prometheus Operator.
+
+| Metric | Labels | What it counts |
+|---|---|---|
+| `curfew_sleeping_workloads` | `namespace`, `kind` | Workloads asleep, from `curfew-state` |
+| `curfew_scale_total` | `kind`, `direction` (`sleep`/`wake`), `result` (`ok`/`error`) | Scale and suspend requests, dry-run ones included |
+| `curfew_freed_cpu_cores` | `namespace`, `kind`, `name` | CPU requests a sleeping workload gives back: stored replicas × its pod's requests |
+| `curfew_freed_memory_bytes` | `namespace`, `kind`, `name` | Same, for memory |
+
+What curfew saves right now, cluster-wide:
+
+```promql
+sum(curfew_freed_cpu_cores)
+sum(curfew_freed_memory_bytes) / 2^30   # GiB
+```
+
+- Only the leader reports `curfew_*` metrics. Other replicas expose controller-runtime's own metrics only.
+- After a restart, the numbers come back as the first reconciles run, within seconds.
+- Freed resources count regular containers only, not init containers. CronJobs are not counted, since they use nothing between runs.
+- The endpoint is plain HTTP without authentication, and the NetworkPolicy opens port 8080 to every namespace. The metrics show namespace and workload names.
 
 ## Tracing
 

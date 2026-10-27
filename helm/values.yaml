@@ -112,6 +112,12 @@ networkPolicy:
   # Ports the API server listens on (443 on most managed clusters, 6443 on k3s, kind and kubeadm).
   apiServerPorts: [443, 6443]
 
+# Prometheus metrics over plain HTTP on port 8080, behind a Service. Only the leader reports curfew_* metrics.
+metrics:
+  enabled: false
+  # Also create a ServiceMonitor (needs the Prometheus Operator CRDs).
+  serviceMonitor: false
+
 # OTLP HTTP endpoint (host:port) that receives traces, e.g. "jaeger-collector.observability:4318".
 # Empty disables tracing.
 tracing:
