@@ -98,6 +98,7 @@ func Run() error {
 			newList:      w.newList,
 			now:          time.Now,
 			waitingSince: map[string]time.Time{},
+			dryRun:       os.Getenv("DRY_RUN") == "true",
 		}
 		err := ctrl.NewControllerManagedBy(mgr).
 			For(w.newObj(), builder.WithPredicates(
@@ -184,6 +185,9 @@ type reconciler struct {
 	// waitingSince is when each workload started waiting for another wave; one reconcile runs at a time.
 	// shortcut: in memory, a leader change restarts the wave timeout; persist it in curfew-state if that matters.
 	waitingSince map[string]time.Time
+	// dryRun sends workload writes with dryRun=All: checked by the API server, never applied.
+	// curfew-state is still written, so wakes are decided and logged too.
+	dryRun bool
 }
 
 func (r *reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Result, err error) {
@@ -195,6 +199,9 @@ func (r *reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 	defer func() { endSpan(span, err) }()
 
 	log := ctrl.LoggerFrom(ctx)
+	if r.dryRun {
+		log = log.WithValues("dryRun", true)
+	}
 	key := fmt.Sprintf("%s.%s.%s", strings.ToLower(r.kind), req.Namespace, req.Name)
 
 	state, err := r.loadState(ctx)
@@ -321,6 +328,10 @@ func (r *reconciler) saveState(ctx context.Context, state *corev1.ConfigMap) (er
 // current returns how many replicas obj runs, and a function that sets them. A CronJob counts as
 // 1 while it runs and 0 while suspended; Deployments and StatefulSets go through /scale.
 func (r *reconciler) current(ctx context.Context, obj client.Object) (int32, func(context.Context, int32) error, error) {
+	writer := r.client
+	if r.dryRun {
+		writer = client.NewDryRunClient(r.client)
+	}
 	if cj, ok := obj.(*batchv1.CronJob); ok {
 		running := int32(1)
 		if ptr.Deref(cj.Spec.Suspend, false) {
@@ -329,7 +340,7 @@ func (r *reconciler) current(ctx context.Context, obj client.Object) (int32, fun
 		return running, func(ctx context.Context, replicas int32) error {
 			patch := client.MergeFrom(cj.DeepCopy())
 			cj.Spec.Suspend = ptr.To(replicas == 0)
-			return r.client.Patch(ctx, cj, patch)
+			return writer.Patch(ctx, cj, patch)
 		}, nil
 	}
 
@@ -339,7 +350,7 @@ func (r *reconciler) current(ctx context.Context, obj client.Object) (int32, fun
 	}
 	return scale.Spec.Replicas, func(ctx context.Context, replicas int32) error {
 		scale.Spec.Replicas = replicas
-		return r.client.SubResource("scale").Update(ctx, obj, client.WithSubResourceBody(scale))
+		return writer.SubResource("scale").Update(ctx, obj, client.WithSubResourceBody(scale))
 	}, nil
 }
 

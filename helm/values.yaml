@@ -98,6 +98,10 @@ affinity: {}
 # Passes --dev: debug logs.
 dev: false
 
+# Decide and log, but change no workload: scale and suspend writes are sent with dryRun=All.
+# The curfew-state ConfigMap is still written.
+dryRun: false
+
 # Namespaces curfew may scale workloads in. Empty: the whole cluster (ClusterRoleBinding).
 # Set: one RoleBinding per namespace, and the operator only watches those. Each namespace must exist.
 watchNamespaces: []

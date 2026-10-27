@@ -146,6 +146,9 @@ func (r *reconciler) waiting(log logr.Logger, key, blocker string) bool {
 	since, ok := r.waitingSince[key]
 	switch {
 	case blocker == "":
+	case r.dryRun:
+		// Nothing really stops in dry-run, so waiting would always time out.
+		log.Info("Would wait for wave", "blocker", blocker)
 	case !ok:
 		log.Info("Waiting for wave", "blocker", blocker)
 		r.waitingSince[key] = r.now()

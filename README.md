@@ -25,6 +25,7 @@ Main values (`helm/values.yaml`):
 | `image.repository` / `image.tag` | `ghcr.io/paloth/curfew` / chart `appVersion` | Operator image. Use an immutable version tag. |
 | `replicaCount` | `1` | Operator pods. Leader election is always on, so more than one is safe: only the leader acts. |
 | `dev` | `false` | Debug logs |
+| `dryRun` | `false` | Decide and log without changing any workload (see [Dry run](#dry-run)) |
 | `watchNamespaces` | `[]` | Namespaces curfew may act in. Empty means the whole cluster. |
 | `networkPolicy.enabled` | `true` | Restricts the operator pod's network traffic |
 | `networkPolicy.apiServerPorts` | `[443, 6443]` | Ports the API server listens on |
@@ -125,6 +126,18 @@ Wave `1` on the database is enough for the example: the app (wave 0) stops first
 - **Invalid annotations** (a bad cron expression or time zone) are logged as errors and the workload is left as it is. Fixing the annotation triggers a new check.
 - **Invalid stored counts** (negative, not a number, or too large) are logged and dropped. The workload is not scaled.
 - **Uninstalling the operator** leaves sleeping workloads at 0. The `curfew-state` ConfigMap is created by the operator, not by Helm, so it survives `helm uninstall`. A reinstall picks the entries up and wakes the workloads on schedule.
+
+## Dry run
+
+Set `dryRun=true` to try curfew on a cluster before letting it act:
+
+```bash
+helm upgrade --install curfew helm/ -n curfew --set dryRun=true
+```
+
+- Every scale and suspend is sent to the API server with `dryRun=All`: it is checked, permissions included, but not applied. Log lines carry `"dryRun":true`.
+- `curfew-state` is still written, so the logs show the wake-ups too. Turning dry run off mid-sleep is safe: the stored count matches the running replicas, and curfew scales them down.
+- Waves don't wait, since nothing really stops. curfew logs `Would wait for wave` and goes on.
 
 ## Permissions
 
