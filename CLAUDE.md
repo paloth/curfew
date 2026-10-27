@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Curfew is a Kubernetes operator that scales workloads (Deployments, StatefulSets, and extra kinds with a `/scale` subresource) to zero, and suspends CronJobs, based on cron schedule annotations. The project uses Go, Cobra for the CLI, and controller-runtime.
+Curfew is a Kubernetes operator that scales workloads (Deployments, StatefulSets, and extra kinds with a `/scale` subresource) to zero, and suspends CronJobs, based on cron schedule annotations. The project uses Go and controller-runtime.
 
 ## Development Commands
 
@@ -40,7 +40,7 @@ just jaeger-down           # Stop Jaeger
 
 ### Project Structure
 - **main.go**: Entry point that delegates to cmd.Execute()
-- **cmd/root.go**: Root Cobra command; sets up logging and tracing, then runs the operator
+- **cmd/root.go**: parses the one flag (`--dev`, standard `flag` package), sets up logging and tracing, then runs the operator
 
 ### Configuration
 No config file. The operator reads:
@@ -69,13 +69,6 @@ Runs in-cluster only, built on controller-runtime (`internal/curfew`), with lead
 - Original replica counts live in the `curfew-state` ConfigMap in the operator's namespace (`POD_NAMESPACE`), keyed `<kind>.<namespace>.<name>`.
 - Each reconcile requeues itself at the next sleep or wake time; removing the annotations wakes the workload.
 - Health probes: `:9090/healthz` and `/readyz`.
-
-### Adding New Commands
-To add a subcommand:
-1. Create a new file in `cmd/` (e.g., `cmd/scale.go`)
-2. Define a cobra.Command with appropriate Use, Short, and Run fields
-3. Register it in an init() function: `rootCmd.AddCommand(yourCmd)`
-4. Bind any flags and implement the Run function
 
 ### OpenTelemetry Integration
 The project uses OpenTelemetry for distributed tracing with Jaeger as the backend:
