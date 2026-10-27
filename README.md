@@ -91,6 +91,24 @@ A workload in that namespace follows the first rule that applies:
 
 Changing or removing the namespace annotations applies at once. Workloads that are no longer covered, because the schedule was removed or they became excluded, are woken up.
 
+### Waves
+
+Some workloads must stop in order, such as an app that needs to shut down cleanly before its database stops. Give them a wave, like Argo CD sync waves:
+
+```yaml
+metadata:
+  annotations:
+    curfew/wave: "1"   # any integer, default 0
+```
+
+Waves only order workloads of the same namespace:
+
+- **Sleep** goes up the waves: `-1`, then `0` (workloads without the annotation), then `1`, and so on. A workload waits until every lower-wave workload that is also going to sleep is fully stopped: no pods left, terminating ones included, and for a CronJob no running Jobs.
+- **Wake** goes down the waves. A workload waits until every higher-wave workload that is also waking up is back and ready.
+- A waiting workload is checked again every 10 seconds. After 10 minutes it stops waiting, logs `Wave timeout, proceeding`, and goes ahead, so one stuck pod can't keep the rest up all night. If the operator restarts or changes leader, the 10 minutes start over.
+
+Wave `1` on the database is enough for the example: the app (wave 0) stops first, and the database comes back first.
+
 ## Behavior
 
 - **Original replicas** are stored in the ConfigMap `curfew-state` in the operator's namespace, with one key per workload: `<kind>.<namespace>.<name>`. To see what is asleep:
@@ -116,6 +134,7 @@ The chart creates:
   - `get`, `list`, `watch` on Deployments and StatefulSets
   - `get`, `update`, `patch` on their `/scale` subresource only
   - `get`, `list`, `watch`, `patch` on CronJobs
+  - `list` on Pods, to know when an earlier [wave](#waves) is fully stopped
 
   For Deployments and StatefulSets, curfew can change nothing but the replica count. CronJobs have no subresource for `suspend`, so curfew needs `patch` on the CronJob itself; it only ever patches `spec.suspend`.
 - **The binding for that role:**
@@ -187,6 +206,7 @@ just colima-undeploy   # uninstall (the curfew-state ConfigMap is kept)
 `test/e2e.sh` checks that:
 - a Deployment and a StatefulSet sleep and wake on real cron times a few minutes ahead,
 - their counts are stored and then cleared,
+- the StatefulSet, in wave 1, waits for the Deployment's pods to be gone,
 - removing the annotations wakes a workload right away.
 
 It runs in a throwaway `curfew-e2e` namespace. `KUBE_CONTEXT` (default `colima`) selects another cluster.
