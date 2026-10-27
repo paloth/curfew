@@ -1,5 +1,5 @@
 {{- if .Values.networkPolicy.enabled }}
-# Ingress: only the health port (kubelet probes). Egress: the API server, DNS, and the trace collector.
+# Ingress: only the health port (kubelet probes) and, when enabled, the metrics port. Egress: the API server, DNS, and the trace collector.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -15,6 +15,10 @@ spec:
     - ports:
         - port: 9090
           protocol: TCP
+        {{- if .Values.metrics.enabled }}
+        - port: 8080
+          protocol: TCP
+        {{- end }}
   egress:
     # The API server is reached by IP, so only ports can be pinned portably.
     - ports:
