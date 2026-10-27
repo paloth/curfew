@@ -91,25 +91,9 @@ vuln:
 docker-build:
     docker build --build-arg VERSION={{version}} -t {{image_tag}} .
 
-# Build Docker image with BuildKit
-docker-build-buildkit:
-    DOCKER_BUILDKIT=1 docker build --build-arg VERSION={{version}} -t {{image_tag}} .
-
 # Build multi-arch Docker image
 docker-buildx:
     docker buildx build --platform linux/amd64,linux/arm64 --build-arg VERSION={{version}} -t {{image_tag}} .
-
-# Push Docker image to registry
-docker-push: docker-build
-    docker push {{image_tag}}
-
-# Build and push Docker image
-docker-release: docker-build docker-push
-    @echo "Released {{image_tag}}"
-
-# Run Docker container locally
-docker-run:
-    docker run --rm -it {{image_tag}}
 
 # Deploy with Helm
 helm-deploy *args: _namespace
@@ -129,23 +113,9 @@ helm-destroy:
 deploy *helm_args: helm-destroy docker-build (helm-deploy helm_args)
     @echo "Deployed {{project_name}} {{image_tag}} to Kubernetes"
 
-# Complete release process with tests
-release version:
-    @echo "Running tests..."
-    just test
-    @echo "Building version {{version}}..."
-    VERSION={{version}} just build-versioned {{version}}
-    @echo "Building and pushing Docker image..."
-    VERSION={{version}} just docker-push
-    @echo "Release {{version}} complete!"
-
 # Development workflow - run checks before commit
 pre-commit: fmt vet lint test
     @echo "Pre-commit checks passed ✓"
-
-# Generate mocks (for when you add interfaces)
-generate:
-    go generate ./...
 
 # Install development tools
 install-tools:

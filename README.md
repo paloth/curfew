@@ -330,7 +330,6 @@ Code layout:
 - `internal/values/`: annotation names and constants
 - `internal/telemetry/`: OpenTelemetry tracer setup
 - `helm/`: the chart
-- `mocks/`: sample annotated manifests for manual testing
 - `test/e2e.sh`: end-to-end test against a running cluster
 
 ## License
