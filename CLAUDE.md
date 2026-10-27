@@ -22,6 +22,13 @@ go test ./internal/curfew    # Test specific package
 just lint                  # golangci-lint v2 (install with `just install-tools`)
 ```
 
+### Documentation
+User docs live in `docs/` (MkDocs Material, `mkdocs.yml`), published to https://paloth.github.io/curfew/ by `.github/workflows/docs.yml` on push to `main`. The README is a short overview that links there; update the docs page with any behavior change.
+```bash
+just docs-serve            # http://127.0.0.1:8000/curfew/, reloads on edits
+just docs-build            # strict build, fails on broken links
+```
+
 ### Dependencies
 ```bash
 go mod tidy                # Clean up dependencies

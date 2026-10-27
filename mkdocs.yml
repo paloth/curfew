@@ -1,0 +1,59 @@
+site_name: curfew
+site_description: Kubernetes operator that puts workloads to sleep on a cron schedule.
+site_url: https://paloth.github.io/curfew/
+repo_url: https://github.com/paloth/curfew
+repo_name: paloth/curfew
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      toggle:
+        icon: material/weather-night
+        name: Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Light mode
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+
+validation:
+  links:
+    anchors: warn
+
+nav:
+  - Home: index.md
+  - Install: install.md
+  - Usage:
+      - Schedules: usage/schedules.md
+      - Namespace schedules: usage/namespaces.md
+      - Holidays: usage/holidays.md
+      - Keep awake: usage/keep-awake.md
+      - Waves: usage/waves.md
+      - Other kinds: usage/other-kinds.md
+      - Other controllers: usage/other-controllers.md
+  - Behavior: behavior.md
+  - Operations:
+      - Dry run: operations/dry-run.md
+      - Metrics: operations/metrics.md
+      - Tracing: operations/tracing.md
+      - Security: operations/security.md
+  - Development: development.md

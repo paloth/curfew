@@ -208,3 +208,14 @@ colima-undeploy:
 # Deploy to Colima and run the end-to-end test (about 5 minutes)
 e2e: colima-deploy
     KUBE_CONTEXT={{kube_context}} OPERATOR_NS={{operator_ns}} test/e2e.sh
+
+# Serve the documentation site at http://127.0.0.1:8000, reloading on edits (needs Python 3)
+docs-serve: _docs-venv
+    .venv-docs/bin/mkdocs serve
+
+# Build the documentation site into site/, failing on broken links
+docs-build: _docs-venv
+    .venv-docs/bin/mkdocs build --strict
+
+_docs-venv:
+    test -x .venv-docs/bin/mkdocs || (python3 -m venv .venv-docs && .venv-docs/bin/pip install -q -r docs/requirements.txt)

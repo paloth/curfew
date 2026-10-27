@@ -16,6 +16,6 @@ func (r *reconciler) scaledUpWhileAsleep(log logr.Logger, namespace, key string)
 	r.scaledUp[key]++
 	if r.scaledUp[key] == fightWarning {
 		log.Info("Scaled up again while asleep, several times: another controller is likely fighting curfew "+
-			"(Argo CD self-heal, KEDA, a CI job). See \"Other controllers\" in the README.", "times", fightWarning)
+			"(Argo CD self-heal, KEDA, a CI job). See https://paloth.github.io/curfew/usage/other-controllers/", "times", fightWarning)
 	}
 }
