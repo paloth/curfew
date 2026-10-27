@@ -190,8 +190,9 @@ colima-up:
 colima-deploy:
     DOCKER_CONTEXT=colima VERSION=e2e just docker-build
     just _namespace --context {{kube_context}}
+    kubectl --context {{kube_context}} apply -f test/widget-crd.yaml
     helm upgrade --install {{project_name}} helm/ --kube-context {{kube_context}} -n {{operator_ns}} \
-        --set image.tag=e2e --set image.pullPolicy=Never --set dev=true --wait --timeout 2m
+        -f test/e2e-values.yaml --set image.tag=e2e --set image.pullPolicy=Never --set dev=true --wait --timeout 2m
     # Same tag on every build: restart so the pod runs the image just built
     kubectl --context {{kube_context}} -n {{operator_ns}} rollout restart deployment/{{project_name}}
     kubectl --context {{kube_context}} -n {{operator_ns}} rollout status deployment/{{project_name}} --timeout 2m

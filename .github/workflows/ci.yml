@@ -101,8 +101,9 @@ jobs:
           kubectl --context "$KUBE_CONTEXT" create namespace "$OPERATOR_NS"
           kubectl --context "$KUBE_CONTEXT" label namespace "$OPERATOR_NS" \
             pod-security.kubernetes.io/enforce=restricted pod-security.kubernetes.io/warn=restricted
+          kubectl --context "$KUBE_CONTEXT" apply -f test/widget-crd.yaml
           helm upgrade --install curfew helm/ --kube-context "$KUBE_CONTEXT" -n "$OPERATOR_NS" \
-            --set image.tag=e2e --set image.pullPolicy=Never --set dev=true --wait --timeout 3m
+            -f test/e2e-values.yaml --set image.tag=e2e --set image.pullPolicy=Never --set dev=true --wait --timeout 3m
       - name: Run the end-to-end test
         run: test/e2e.sh
       - name: Operator logs

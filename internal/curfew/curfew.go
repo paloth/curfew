@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -27,7 +28,9 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -56,7 +59,15 @@ func Run() error {
 		return err
 	}
 
+	extra, err := extraKinds(os.Getenv("EXTRA_KINDS"))
+	if err != nil {
+		return err
+	}
+	kinds := append(slices.Clone(builtinKinds), extra...)
+
 	opts := ctrl.Options{
+		// Extra kinds are unstructured; without this, every Get on them would skip the cache.
+		Client:                 client.Options{Cache: &client.CacheOptions{Unstructured: true}},
 		HealthProbeBindAddress: ":9090",
 		// Off unless METRICS_ADDR is set (Helm value metrics.enabled).
 		Metrics:                       metricsserver.Options{BindAddress: cmp.Or(os.Getenv("METRICS_ADDR"), "0")},
@@ -82,22 +93,13 @@ func Run() error {
 		return err
 	}
 
-	for _, w := range []struct {
-		kind    string
-		newObj  func() client.Object
-		newList func() client.ObjectList
-	}{
-		{"Deployment", func() client.Object { return &appsv1.Deployment{} }, func() client.ObjectList { return &appsv1.DeploymentList{} }},
-		{"StatefulSet", func() client.Object { return &appsv1.StatefulSet{} }, func() client.ObjectList { return &appsv1.StatefulSetList{} }},
-		{"CronJob", func() client.Object { return &batchv1.CronJob{} }, func() client.ObjectList { return &batchv1.CronJobList{} }},
-	} {
+	for _, w := range kinds {
 		r := &reconciler{
 			client:       mgr.GetClient(),
 			reader:       mgr.GetAPIReader(),
 			namespace:    namespace,
-			kind:         w.kind,
-			newObj:       w.newObj,
-			newList:      w.newList,
+			workloadKind: w,
+			kinds:        kinds,
 			now:          time.Now,
 			waitingSince: map[string]time.Time{},
 			dryRun:       os.Getenv("DRY_RUN") == "true",
@@ -179,15 +181,57 @@ func (r *reconciler) workloadsIn(ctx context.Context, ns client.Object) []reconc
 	return reqs
 }
 
+// workloadKind is a kind curfew schedules.
+type workloadKind struct {
+	kind    string
+	newObj  func() client.Object
+	newList func() client.ObjectList
+}
+
+var builtinKinds = []workloadKind{
+	{"Deployment", func() client.Object { return &appsv1.Deployment{} }, func() client.ObjectList { return &appsv1.DeploymentList{} }},
+	{"StatefulSet", func() client.Object { return &appsv1.StatefulSet{} }, func() client.ObjectList { return &appsv1.StatefulSetList{} }},
+	{"CronJob", func() client.Object { return &batchv1.CronJob{} }, func() client.ObjectList { return &batchv1.CronJobList{} }},
+}
+
+// extraKinds parses EXTRA_KINDS ("Rollout.v1alpha1.argoproj.io,..."): kinds with a /scale
+// subresource, read as unstructured objects (Helm value extraKinds).
+func extraKinds(list string) ([]workloadKind, error) {
+	var kinds []workloadKind
+	for s := range strings.SplitSeq(list, ",") {
+		if s = strings.TrimSpace(s); s == "" {
+			continue
+		}
+		gvk, _ := schema.ParseKindArg(s)
+		if gvk == nil || gvk.Group == "" {
+			return nil, fmt.Errorf("EXTRA_KINDS: %q is not Kind.version.group", s)
+		}
+		kinds = append(kinds, workloadKind{
+			kind: gvk.Kind,
+			newObj: func() client.Object {
+				u := &unstructured.Unstructured{}
+				u.SetGroupVersionKind(*gvk)
+				return u
+			},
+			newList: func() client.ObjectList {
+				l := &unstructured.UnstructuredList{}
+				l.SetGroupVersionKind(gvk.GroupVersion().WithKind(gvk.Kind + "List"))
+				return l
+			},
+		})
+	}
+	return kinds, nil
+}
+
 type reconciler struct {
 	client client.Client
 	// reader is uncached, so the state ConfigMap needs no cluster-wide ConfigMap watch.
 	reader    client.Reader
 	namespace string
-	kind      string
-	newObj    func() client.Object
-	newList   func() client.ObjectList
-	now       func() time.Time
+	workloadKind
+	// kinds are all the kinds curfew schedules, for waves.
+	kinds []workloadKind
+	now   func() time.Time
 	// waitingSince is when each workload started waiting for another wave; one reconcile runs at a time.
 	// shortcut: in memory, a leader change restarts the wave timeout; persist it in curfew-state if that matters.
 	waitingSince map[string]time.Time
@@ -358,6 +402,21 @@ func (r *reconciler) current(ctx context.Context, obj client.Object) (int32, fun
 		}, nil
 	}
 
+	if u, ok := obj.(*unstructured.Unstructured); ok {
+		scale, err := r.unstructuredScale(ctx, u)
+		if err != nil {
+			return 0, nil, err
+		}
+		return scale.Spec.Replicas, func(ctx context.Context, replicas int32) error {
+			scale.Spec.Replicas = replicas
+			body, err := runtime.DefaultUnstructuredConverter.ToUnstructured(scale)
+			if err != nil {
+				return err
+			}
+			return writer.SubResource("scale").Update(ctx, u, client.WithSubResourceBody(&unstructured.Unstructured{Object: body}))
+		}, nil
+	}
+
 	scale := &autoscalingv1.Scale{}
 	if err := r.client.SubResource("scale").Get(ctx, obj, scale); err != nil {
 		return 0, nil, err
@@ -366,6 +425,18 @@ func (r *reconciler) current(ctx context.Context, obj client.Object) (int32, fun
 		scale.Spec.Replicas = replicas
 		return writer.SubResource("scale").Update(ctx, obj, client.WithSubResourceBody(scale))
 	}, nil
+}
+
+// unstructuredScale reads an extra kind's /scale. The client takes only an unstructured body for an
+// unstructured object, so it is converted to autoscalingv1.Scale.
+func (r *reconciler) unstructuredScale(ctx context.Context, u *unstructured.Unstructured) (*autoscalingv1.Scale, error) {
+	body := &unstructured.Unstructured{}
+	body.SetGroupVersionKind(autoscalingv1.SchemeGroupVersion.WithKind("Scale"))
+	if err := r.client.SubResource("scale").Get(ctx, u, body); err != nil {
+		return nil, err
+	}
+	scale := &autoscalingv1.Scale{}
+	return scale, runtime.DefaultUnstructuredConverter.FromUnstructured(body.Object, scale)
 }
 
 func (r *reconciler) scaleTo(ctx context.Context, set func(context.Context, int32) error, from, to int32) (err error) {

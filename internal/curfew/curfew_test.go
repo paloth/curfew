@@ -194,9 +194,8 @@ func newTestReconciler(c client.Client, now *time.Time) *reconciler {
 		client:       c,
 		reader:       c,
 		namespace:    "curfew",
-		kind:         "Deployment",
-		newObj:       func() client.Object { return &appsv1.Deployment{} },
-		newList:      func() client.ObjectList { return &appsv1.DeploymentList{} },
+		workloadKind: builtinKinds[0],
+		kinds:        builtinKinds,
 		now:          func() time.Time { return *now },
 		waitingSince: map[string]time.Time{},
 	}
