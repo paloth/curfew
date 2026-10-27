@@ -616,6 +616,10 @@ func TestReconcileDryRun(t *testing.T) {
 	}
 
 	check("2")
+	check("2") // still up at night, as dry run never scaled it: not another controller fighting
+	if len(r.scaledUp) != 0 {
+		t.Errorf("scaledUp = %v in dry run, want empty", r.scaledUp)
+	}
 	now = paris(t, "2026-10-20 08:00")
 	check("")
 }
