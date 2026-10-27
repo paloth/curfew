@@ -80,6 +80,55 @@ func TestEvaluate(t *testing.T) {
 	}
 }
 
+func TestEvaluateSkipDates(t *testing.T) {
+	// Mon-Fri, sleep at 20:00, wake at 08:00. 2026-10-26 is a Monday, 2026-10-28 a Wednesday.
+	tests := []struct {
+		name       string
+		skip       string
+		now        string
+		wantAsleep bool
+		wantNext   string
+	}{
+		{"skipped Monday extends the weekend", "2026-10-26", "2026-10-23 21:00", true, "2026-10-27 08:00"},
+		{"asleep during the skipped day", "2026-10-26", "2026-10-26 12:00", true, "2026-10-27 08:00"},
+		{"day before a skipped Wednesday", "2026-10-28", "2026-10-27 12:00", false, "2026-10-27 20:00"},
+		{"night before a skipped Wednesday", "2026-10-28", "2026-10-27 22:00", true, "2026-10-29 08:00"},
+		{"several dates, spaces", "2026-10-28, 2026-10-29", "2026-10-27 22:00", true, "2026-10-30 08:00"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			annotations := maps.Clone(schedule)
+			annotations[values.SkipDatesAnnotation] = tt.skip
+			asleep, next, err := evaluate(annotations, paris(t, tt.now))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if asleep != tt.wantAsleep || !next.Equal(paris(t, tt.wantNext)) {
+				t.Errorf("evaluate() = %v, %v; want %v, %s", asleep, next, tt.wantAsleep, tt.wantNext)
+			}
+		})
+	}
+
+	// 00:30 in Paris is still the day before in UTC: dates are read in the schedule's zone.
+	asleep, next, err := evaluate(map[string]string{
+		values.SleepAnnotation:     "0 20 * * *",
+		values.WakeAnnotation:      "30 0 * * *",
+		values.TimezoneAnnotation:  "Europe/Paris",
+		values.SkipDatesAnnotation: "2026-10-27",
+	}, paris(t, "2026-10-26 21:00"))
+	if err != nil || !asleep || !next.Equal(paris(t, "2026-10-28 00:30")) {
+		t.Errorf("zone: evaluate() = %v, %v, %v; want asleep until 2026-10-28 00:30", asleep, next, err)
+	}
+
+	for _, bad := range []string{"2026-13-01", "26-12-25", "2026-12-5", "tomorrow"} {
+		annotations := maps.Clone(schedule)
+		annotations[values.SkipDatesAnnotation] = bad
+		if _, _, err := evaluate(annotations, time.Now()); err == nil {
+			t.Errorf("%q: want error", bad)
+		}
+	}
+}
+
 func TestReconcileSleepAndWake(t *testing.T) {
 	logs.InitLogger(false)
 	ctx := context.Background()

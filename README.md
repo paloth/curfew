@@ -55,6 +55,7 @@ metadata:
 | `curfew/sleep` | yes | Standard 5-field cron (`minute hour day-of-month month day-of-week`) or a descriptor like `@daily` |
 | `curfew/wake` | yes | Same as `sleep` |
 | `curfew/timezone` | no | IANA time zone name, e.g. `America/New_York`. Default `UTC`. |
+| `curfew/skip-dates` | no | Comma-separated dates (`YYYY-MM-DD`), e.g. `2026-12-24,2026-12-25`. No sleep or wake on those days (see [Holidays](#holidays)). |
 | `curfew/awake-until` | no | RFC 3339 time, e.g. `2026-10-28T08:00:00+01:00`. Stay awake until then (see [Keep awake](#keep-awake)). |
 
 Both schedules are read in the given time zone.
@@ -94,6 +95,19 @@ A workload in that namespace follows the first rule that applies:
 3. **The namespace's rule.**
 
 Changing or removing the namespace annotations applies at once. Workloads that are no longer covered, because the schedule was removed or they became excluded, are woken up.
+
+### Holidays
+
+Cron can't say "not on public holidays". List those days instead:
+
+```yaml
+    curfew/skip-dates: "2026-12-24,2026-12-25,2027-01-01"
+```
+
+- No sleep or wake happens on a listed day, so the workload keeps the state it was in when the day started. With the example schedule (sleep at 20:00, wake at 08:00 on weekdays), a workload stays asleep from Wednesday 23 December at 20:00 until Monday 28 December at 08:00, and again over New Year's Day.
+- Dates are read in the schedule's `curfew/timezone`.
+- It belongs to the schedule: on a namespace, it applies to the workloads that follow the namespace's schedule. A workload with its own `curfew/sleep` needs its own `curfew/skip-dates`.
+- Exact dates only: no ranges and no yearly repeats, so update the list each year. An invalid date is logged and the workload is left as it is.
 
 ### Keep awake
 
