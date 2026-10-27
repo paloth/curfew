@@ -147,10 +147,10 @@ pre-commit: fmt vet lint test
 generate:
     go generate ./...
 
-# Install development tools
+# Install development tools (golangci-lint at the version CI pins in .github/workflows/ci.yml)
 install-tools:
     @echo "Installing golangci-lint..."
-    go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+    go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
     @echo "Installing tools complete!"
 
 # Show dependency tree
