@@ -1,0 +1,31 @@
+{{- if .Values.metrics.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "helm.fullname" . }}-metrics
+  labels:
+    {{- include "helm.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "helm.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: metrics
+      port: 8080
+      targetPort: metrics
+      protocol: TCP
+{{- if .Values.metrics.serviceMonitor }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "helm.fullname" . }}
+  labels:
+    {{- include "helm.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "helm.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: metrics
+{{- end }}
+{{- end }}

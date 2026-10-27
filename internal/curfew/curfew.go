@@ -2,6 +2,7 @@
 package curfew
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -56,8 +57,9 @@ func Run() error {
 	}
 
 	opts := ctrl.Options{
-		HealthProbeBindAddress:        ":9090",
-		Metrics:                       metricsserver.Options{BindAddress: "0"},
+		HealthProbeBindAddress: ":9090",
+		// Off unless METRICS_ADDR is set (Helm value metrics.enabled).
+		Metrics:                       metricsserver.Options{BindAddress: cmp.Or(os.Getenv("METRICS_ADDR"), "0")},
 		LeaderElection:                true,
 		LeaderElectionID:              "curfew-leader",
 		LeaderElectionNamespace:       namespace,
@@ -213,6 +215,7 @@ func (r *reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 	obj := r.newObj()
 	if err := r.client.Get(ctx, req.NamespacedName, obj); err != nil {
 		if apierrors.IsNotFound(err) && sleeping {
+			observeFreed(r.kind, req.Namespace, req.Name, nil, "")
 			delete(state.Data, key)
 			return ctrl.Result{}, r.saveState(ctx, state)
 		}
@@ -290,6 +293,8 @@ func (r *reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 		}
 	}
 
+	observeFreed(r.kind, req.Namespace, req.Name, obj, state.Data[key])
+
 	if next.IsZero() {
 		return ctrl.Result{}, nil
 	}
@@ -311,6 +316,9 @@ func (r *reconciler) loadState(ctx context.Context) (_ *corev1.ConfigMap, err er
 	if state.Data == nil {
 		state.Data = map[string]string{}
 	}
+	if err == nil {
+		observeState(state.Data)
+	}
 	return state, err
 }
 
@@ -320,9 +328,14 @@ func (r *reconciler) saveState(ctx context.Context, state *corev1.ConfigMap) (er
 	defer func() { endSpan(span, err) }()
 
 	if state.ResourceVersion == "" {
-		return r.client.Create(ctx, state)
+		err = r.client.Create(ctx, state)
+	} else {
+		err = r.client.Update(ctx, state)
 	}
-	return r.client.Update(ctx, state)
+	if err == nil {
+		observeState(state.Data)
+	}
+	return err
 }
 
 // current returns how many replicas obj runs, and a function that sets them. A CronJob counts as
@@ -359,7 +372,10 @@ func (r *reconciler) scaleTo(ctx context.Context, set func(context.Context, int3
 		attribute.Int("from", int(from)),
 		attribute.Int("to", int(to)),
 	))
-	defer func() { endSpan(span, err) }()
+	defer func() {
+		observeScale(r.kind, to, err)
+		endSpan(span, err)
+	}()
 
 	return set(ctx, to)
 }
