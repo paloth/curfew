@@ -102,6 +102,14 @@ dev: false
 # The curfew-state ConfigMap is still written.
 dryRun: false
 
+# More kinds to schedule, besides Deployments, StatefulSets and CronJobs. Each needs a /scale
+# subresource, and its CRD must exist before curfew starts. For example, Argo Rollouts:
+#   - group: argoproj.io
+#     version: v1alpha1
+#     kind: Rollout
+#     resource: rollouts
+extraKinds: []
+
 # Namespaces curfew may scale workloads in. Empty: the whole cluster (ClusterRoleBinding).
 # Set: one RoleBinding per namespace, and the operator only watches those. Each namespace must exist.
 watchNamespaces: []

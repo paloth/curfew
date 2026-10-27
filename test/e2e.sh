@@ -3,6 +3,8 @@
 #   1. a Deployment, a StatefulSet and a CronJob sleep and wake on real cron times, a few minutes from now
 #      (the StatefulSet in wave 1, so it waits for the Deployment)
 #   2. curfew/awake-until keeps a sleeping Deployment awake, and removing the annotations wakes it
+#   3. a namespace schedule, with StatefulSets excluded
+#   4. an extra kind (the Widget custom resource from test/widget-crd.yaml) sleeps through /scale
 set -euo pipefail
 
 CTX="${KUBE_CONTEXT:-colima}"
@@ -157,5 +159,25 @@ sleep 5
 expect "db (excluded kind) replicas" "$(replicas statefulset/db)" 2
 k annotate namespace "$NS" curfew/sleep- curfew/wake- curfew/exclude-kinds- >/dev/null
 wait_for "app back to 2 once the namespace schedule is removed" 60 app_at 2
+
+echo "4. Extra kind: a Widget custom resource, scaled through /scale"
+widget_at() { [[ "$(k -n "$NS" get widget/widget -o jsonpath='{.spec.replicas}')" == "$1" ]]; }
+k apply -f - >/dev/null <<EOF
+apiVersion: e2e.curfew.test/v1
+kind: Widget
+metadata:
+  name: widget
+  namespace: $NS
+  annotations:
+    curfew/sleep: "0 0 2 1 *"
+    curfew/wake: "0 0 1 1 *"
+spec:
+  replicas: 2
+EOF
+wait_for "widget scaled to 0" 60 widget_at 0
+expect "stored widget" "$(stored "widget.$NS.widget")" 2
+k -n "$NS" annotate widget/widget curfew/sleep- curfew/wake- >/dev/null
+wait_for "widget back to 2" 60 widget_at 2
+expect "stored widget after wake" "$(stored "widget.$NS.widget")" ""
 
 echo "PASS"

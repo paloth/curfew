@@ -15,6 +15,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -45,7 +47,8 @@ func (r *reconciler) waveBlocker(ctx context.Context, obj client.Object, ns *cor
 	}
 
 	var blocker string
-	for _, list := range []client.ObjectList{&appsv1.DeploymentList{}, &appsv1.StatefulSetList{}, &batchv1.CronJobList{}} {
+	for _, k := range r.kinds {
+		list := k.newList()
 		if err := r.client.List(ctx, list, client.InNamespace(obj.GetNamespace())); err != nil {
 			return "", err
 		}
@@ -54,7 +57,7 @@ func (r *reconciler) waveBlocker(ctx context.Context, obj client.Object, ns *cor
 			if !ok || blocker != "" {
 				return nil
 			}
-			kind := kindOf(peer)
+			kind := k.kind
 			if !r.goesBefore(peer, kind, ns, mine, asleep) {
 				return nil
 			}
@@ -85,16 +88,6 @@ func (r *reconciler) goesBefore(peer client.Object, kind string, ns *corev1.Name
 	return err == nil && peerAsleep == asleep
 }
 
-func kindOf(o client.Object) string {
-	switch o.(type) {
-	case *appsv1.Deployment:
-		return "Deployment"
-	case *appsv1.StatefulSet:
-		return "StatefulSet"
-	}
-	return "CronJob"
-}
-
 // peerDone reports whether peer finished going to sleep (no pods left, terminating ones included,
 // or no running Jobs) or waking up (back from curfew-state and ready).
 func (r *reconciler) peerDone(ctx context.Context, peer client.Object, kind string, asleep bool, state map[string]string) (bool, error) {
@@ -105,20 +98,25 @@ func (r *reconciler) peerDone(ctx context.Context, peer client.Object, kind stri
 	}
 
 	var replicas, ready int32
-	var selector *metav1.LabelSelector
+	var selector labels.Selector
+	var err error
 	switch p := peer.(type) {
 	case *batchv1.CronJob:
 		// Back from curfew-state is enough on wake: one suspended by its owner stays suspended.
 		return !asleep || ptr.Deref(p.Spec.Suspend, false) && len(p.Status.Active) == 0, nil
 	case *appsv1.Deployment:
-		replicas, ready, selector = ptr.Deref(p.Spec.Replicas, 1), p.Status.ReadyReplicas, p.Spec.Selector
-		if p.Status.ObservedGeneration < p.Generation {
-			return false, nil
+		replicas, ready = ptr.Deref(p.Spec.Replicas, 1), p.Status.ReadyReplicas
+		if selector, err = metav1.LabelSelectorAsSelector(p.Spec.Selector); err != nil || p.Status.ObservedGeneration < p.Generation {
+			return false, err
 		}
 	case *appsv1.StatefulSet:
-		replicas, ready, selector = ptr.Deref(p.Spec.Replicas, 1), p.Status.ReadyReplicas, p.Spec.Selector
-		if p.Status.ObservedGeneration < p.Generation {
-			return false, nil
+		replicas, ready = ptr.Deref(p.Spec.Replicas, 1), p.Status.ReadyReplicas
+		if selector, err = metav1.LabelSelectorAsSelector(p.Spec.Selector); err != nil || p.Status.ObservedGeneration < p.Generation {
+			return false, err
+		}
+	case *unstructured.Unstructured:
+		if replicas, ready, selector, err = r.unstructuredPeer(ctx, p); err != nil {
+			return false, err
 		}
 	}
 
@@ -128,16 +126,36 @@ func (r *reconciler) peerDone(ctx context.Context, peer client.Object, kind stri
 	if replicas > 0 {
 		return false, nil
 	}
-	sel, err := metav1.LabelSelectorAsSelector(selector)
-	if err != nil {
-		return false, err
-	}
 	// Uncached, so curfew keeps no cluster-wide Pod cache.
 	pods := &corev1.PodList{}
-	if err := r.reader.List(ctx, pods, client.InNamespace(peer.GetNamespace()), client.MatchingLabelsSelector{Selector: sel}, client.Limit(1)); err != nil {
+	if err := r.reader.List(ctx, pods, client.InNamespace(peer.GetNamespace()), client.MatchingLabelsSelector{Selector: selector}, client.Limit(1)); err != nil {
 		return false, err
 	}
 	return len(pods.Items) == 0, nil
+}
+
+// unstructuredPeer reads an extra kind's replicas, readiness and pod selector from its /scale.
+// Readiness is status.readyReplicas when the kind reports it, else the replicas /scale reports.
+func (r *reconciler) unstructuredPeer(ctx context.Context, u *unstructured.Unstructured) (int32, int32, labels.Selector, error) {
+	scale, err := r.unstructuredScale(ctx, u)
+	if err != nil {
+		return 0, 0, nil, err
+	}
+	var status struct {
+		ReadyReplicas *int32 `json:"readyReplicas"`
+	}
+	if s, ok := u.Object["status"].(map[string]any); ok {
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(s, &status); err != nil {
+			return 0, 0, nil, err
+		}
+	}
+	ready := ptr.Deref(status.ReadyReplicas, scale.Status.Replicas)
+	if scale.Status.Selector == "" {
+		// No selector reported: no pods to wait for, rather than every pod in the namespace.
+		return scale.Spec.Replicas, ready, labels.Nothing(), nil
+	}
+	selector, err := labels.Parse(scale.Status.Selector)
+	return scale.Spec.Replicas, ready, selector, err
 }
 
 // waiting records how long key has been held back by blocker and says whether to keep waiting.

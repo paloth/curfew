@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Curfew is a Kubernetes operator that scales workloads (Deployments and StatefulSets) to zero, and suspends CronJobs, based on cron schedule annotations. The project uses Go, Cobra for the CLI, and controller-runtime.
+Curfew is a Kubernetes operator that scales workloads (Deployments, StatefulSets, and extra kinds with a `/scale` subresource) to zero, and suspends CronJobs, based on cron schedule annotations. The project uses Go, Cobra for the CLI, and controller-runtime.
 
 ## Development Commands
 
@@ -50,6 +50,7 @@ No config file. The operator reads:
 - `OTEL_EXPORTER_OTLP_INSECURE=true` env (optional): plain HTTP for traces instead of TLS (Helm value `tracing.insecure`)
 - `METRICS_ADDR` env (optional, e.g. `:8080`): Prometheus metrics, off when unset (Helm value `metrics.enabled`); curfew's own metrics are in `internal/curfew/metrics.go`
 - `DRY_RUN=true` env (optional): workload writes are sent with dryRun=All, curfew-state is still written, waves don't wait (Helm value `dryRun`)
+- `EXTRA_KINDS` env (optional, comma-separated `Kind.version.group`): more kinds with a `/scale` subresource, handled as unstructured objects (Helm value `extraKinds`, which also adds their RBAC rules; `extraKinds` in `internal/curfew/curfew.go`)
 - `WATCH_NAMESPACES` env (optional, comma-separated): only watch these namespaces (Helm value `watchNamespaces`, which also swaps the ClusterRoleBinding for per-namespace RoleBindings)
 
 ### Operator
@@ -63,7 +64,7 @@ Runs in-cluster only, built on controller-runtime (`internal/curfew`), with lead
 - `curfew/awake-until` (RFC 3339) on a workload, else its namespace, keeps it awake until then (`desired` in `internal/curfew/schedule.go`, which Reconcile and waves both use).
 - `curfew/wave` (integer, default 0, negative allowed) orders workloads within a namespace: on sleep a workload waits until lower waves going to sleep have no pods (or running Jobs) left, on wake until higher waves waking up are ready; it polls every 10s and gives up after 10 min (`internal/curfew/wave.go`).
 - Namespaces starting with `kube-` are ignored (`scheduleFor`, `scheduled`).
-- Deployments and StatefulSets scale only through the `/scale` subresource; CronJobs are suspended by patching `spec.suspend` (no subresource exists), counted as 1 replica running / 0 suspended (`current` in `internal/curfew/curfew.go`).
+- Deployments, StatefulSets and extra kinds scale only through the `/scale` subresource (extra kinds through an unstructured body, `unstructuredScale`); CronJobs are suspended by patching `spec.suspend` (no subresource exists), counted as 1 replica running / 0 suspended (`current` in `internal/curfew/curfew.go`).
 - Original replica counts live in the `curfew-state` ConfigMap in the operator's namespace (`POD_NAMESPACE`), keyed `<kind>.<namespace>.<name>`.
 - Each reconcile requeues itself at the next sleep or wake time; removing the annotations wakes the workload.
 - Health probes: `:9090/healthz` and `/readyz`.

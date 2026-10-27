@@ -1,6 +1,6 @@
 # curfew
 
-A Kubernetes operator that scales Deployments and StatefulSets to zero, and suspends CronJobs, on a cron schedule, then brings them back. Use it to switch off non-production workloads at night and on weekends.
+A Kubernetes operator that scales Deployments, StatefulSets and any other kind with a `/scale` subresource to zero, and suspends CronJobs, on a cron schedule, then brings them back. Use it to switch off non-production workloads at night and on weekends.
 
 You opt a workload in with two annotations: when to sleep, and when to wake. curfew remembers the replica count before scaling down and restores it on wake-up.
 
@@ -26,6 +26,7 @@ Main values (`helm/values.yaml`):
 | `replicaCount` | `1` | Operator pods. Leader election is always on, so more than one is safe: only the leader acts. |
 | `dev` | `false` | Debug logs |
 | `dryRun` | `false` | Decide and log without changing any workload (see [Dry run](#dry-run)) |
+| `extraKinds` | `[]` | More kinds to schedule, such as Argo Rollouts (see [Other kinds](#other-kinds)) |
 | `watchNamespaces` | `[]` | Namespaces curfew may act in. Empty means the whole cluster. |
 | `networkPolicy.enabled` | `true` | Restricts the operator pod's network traffic |
 | `networkPolicy.apiServerPorts` | `[443, 6443]` | Ports the API server listens on |
@@ -141,6 +142,26 @@ Waves only order workloads of the same namespace:
 
 Wave `1` on the database is enough for the example: the app (wave 0) stops first, and the database comes back first.
 
+### Other kinds
+
+Any kind with a `/scale` subresource can be scheduled too, such as Argo Rollouts:
+
+```yaml
+# values.yaml
+extraKinds:
+  - group: argoproj.io
+    version: v1alpha1
+    kind: Rollout
+    resource: rollouts   # the plural name, used for permissions
+```
+
+- curfew then reads the same annotations on them, and namespace schedules, `curfew/exclude-kinds` (`Rollout`) and waves cover them too.
+- The chart grants `get`, `list`, `watch` on the kind, and `get`, `update`, `patch` on its `/scale` only.
+- In waves, curfew waits for the pods matching the selector that `/scale` reports. Readiness on wake is `status.readyReplicas` when the kind has it, else the replica count `/scale` reports.
+- The CRD must exist before curfew starts. If it doesn't, curfew fails to start.
+- They are not counted in the `curfew_freed_*` metrics.
+- KEDA `ScaledObject`s are not supported this way: KEDA would scale the workload back up.
+
 ## Behavior
 
 - **Original replicas** are stored in the ConfigMap `curfew-state` in the operator's namespace, with one key per workload: `<kind>.<namespace>.<name>`. To see what is asleep:
@@ -179,6 +200,7 @@ The chart creates:
   - `get`, `update`, `patch` on their `/scale` subresource only
   - `get`, `list`, `watch`, `patch` on CronJobs
   - `list` on Pods, to know when an earlier [wave](#waves) is fully stopped
+  - for each of the `extraKinds`: `get`, `list`, `watch` on it, and `get`, `update`, `patch` on its `/scale`
 
   For Deployments and StatefulSets, curfew can change nothing but the replica count. CronJobs have no subresource for `suspend`, so curfew needs `patch` on the CronJob itself; it only ever patches `spec.suspend`.
 - **The binding for that role:**
@@ -274,7 +296,8 @@ just colima-undeploy   # uninstall (the curfew-state ConfigMap is kept)
 - a Deployment and a StatefulSet sleep and wake on real cron times a few minutes ahead,
 - their counts are stored and then cleared,
 - the StatefulSet, in wave 1, waits for the Deployment's pods to be gone,
-- `curfew/awake-until` wakes a sleeping workload, and removing the annotations wakes it right away.
+- `curfew/awake-until` wakes a sleeping workload, and removing the annotations wakes it right away,
+- a `Widget` custom resource (`test/widget-crd.yaml`, enabled through `test/e2e-values.yaml`) sleeps and wakes through `/scale`.
 
 It runs in a throwaway `curfew-e2e` namespace. `KUBE_CONTEXT` (default `colima`) selects another cluster.
 
