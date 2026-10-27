@@ -2,7 +2,7 @@
 # End-to-end test against a deployed curfew (see `just e2e`). About 5 minutes:
 #   1. a Deployment, a StatefulSet and a CronJob sleep and wake on real cron times, a few minutes from now
 #      (the StatefulSet in wave 1, so it waits for the Deployment)
-#   2. a sleeping Deployment wakes up as soon as its annotations are removed
+#   2. curfew/awake-until keeps a sleeping Deployment awake, and removing the annotations wakes it
 set -euo pipefail
 
 CTX="${KUBE_CONTEXT:-colima}"
@@ -13,6 +13,9 @@ k() { kubectl --context "$CTX" "$@"; }
 
 # "minute hour" in UTC, $1 minutes from now (BSD date on macOS, GNU date elsewhere).
 at() { date -u -v+"$1"M '+%M %H' 2>/dev/null || date -u -d "+$1 min" '+%M %H'; }
+
+# RFC 3339 time, one hour from now.
+in_an_hour() { date -u -v+1H '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -d '+1 hour' '+%Y-%m-%dT%H:%M:%SZ'; }
 
 replicas() { k -n "$NS" get "$1" -o jsonpath='{.spec.replicas}'; }
 
@@ -131,11 +134,15 @@ expect "stored statefulset after wake" "$(stored "statefulset.$NS.db")" ""
 wait_for "cronjob resumed" 30 cron_is false
 expect "stored cronjob after wake" "$(stored "cronjob.$NS.job")" ""
 
-echo "2. Removing the annotations wakes a sleeping workload"
+echo "2. curfew/awake-until, then removing the annotations"
 # Wake on Jan 1 comes before sleep on Jan 2, so this is "asleep" right now (except on Jan 1).
 k -n "$NS" annotate deployment/app --overwrite \
   curfew/sleep="0 0 2 1 *" curfew/wake="0 0 1 1 *" >/dev/null
 wait_for "app scaled to 0" 60 app_at 0
+k -n "$NS" annotate deployment/app curfew/awake-until="$(in_an_hour)" >/dev/null
+wait_for "app kept awake for an hour" 60 app_at 2
+k -n "$NS" annotate deployment/app curfew/awake-until- >/dev/null
+wait_for "app back to sleep once the override is removed" 60 app_at 0
 k -n "$NS" annotate deployment/app curfew/sleep- curfew/wake- >/dev/null
 wait_for "app back to 2" 60 app_at 2
 expect "stored deployment after removal" "$(stored "deployment.$NS.app")" ""

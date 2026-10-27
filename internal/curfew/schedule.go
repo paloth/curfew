@@ -63,6 +63,43 @@ func scheduled(ctx context.Context, c client.Reader, obj client.Object) bool {
 	return c.Get(ctx, client.ObjectKey{Name: obj.GetNamespace()}, ns) == nil && hasSchedule(ns)
 }
 
+// desired reports whether obj should be asleep at now and when that next changes, from its schedule
+// and curfew/awake-until. No schedule means awake, with a zero next.
+func desired(obj metav1.Object, kind string, ns *corev1.Namespace, now time.Time) (bool, time.Time, error) {
+	sched := scheduleFor(obj, kind, ns)
+	if sched == nil {
+		return false, time.Time{}, nil
+	}
+	asleep, next, err := evaluate(sched, now)
+	if err != nil {
+		return false, time.Time{}, err
+	}
+	until, err := awakeUntil(obj, ns)
+	if err != nil {
+		return false, time.Time{}, fmt.Errorf("%s: %w", values.AwakeUntilAnnotation, err)
+	}
+	if now.Before(until) {
+		asleep = false
+		if until.Before(next) {
+			next = until
+		}
+	}
+	return asleep, next, nil
+}
+
+// awakeUntil reads curfew/awake-until (RFC 3339) from obj, else from its namespace; zero when unset.
+// A namespace's applies to all its workloads, those with their own schedule included.
+func awakeUntil(obj metav1.Object, ns *corev1.Namespace) (time.Time, error) {
+	v, ok := obj.GetAnnotations()[values.AwakeUntilAnnotation]
+	if !ok && ns != nil {
+		v, ok = ns.GetAnnotations()[values.AwakeUntilAnnotation]
+	}
+	if !ok {
+		return time.Time{}, nil
+	}
+	return time.Parse(time.RFC3339, strings.TrimSpace(v))
+}
+
 // evaluate reports whether the workload should be asleep at now, and when that next changes.
 func evaluate(annotations map[string]string, now time.Time) (bool, time.Time, error) {
 	tz := annotations[values.TimezoneAnnotation]

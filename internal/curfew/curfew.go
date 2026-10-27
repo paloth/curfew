@@ -146,11 +146,15 @@ func watched(c client.Reader) predicate.Funcs {
 }
 
 // namespaceScheduleChanged passes namespaces whose annotations change while they have, or had, a
-// schedule. Workloads created later bring their own events.
+// schedule or a curfew/awake-until. Workloads created later bring their own events.
 var namespaceScheduleChanged = predicate.Funcs{
 	CreateFunc: func(event.CreateEvent) bool { return false },
 	UpdateFunc: func(e event.UpdateEvent) bool {
-		return (hasSchedule(e.ObjectOld) || hasSchedule(e.ObjectNew)) &&
+		matters := func(o client.Object) bool {
+			_, override := o.GetAnnotations()[values.AwakeUntilAnnotation]
+			return hasSchedule(o) || override
+		}
+		return (matters(e.ObjectOld) || matters(e.ObjectNew)) &&
 			!maps.Equal(e.ObjectOld.GetAnnotations(), e.ObjectNew.GetAnnotations())
 	},
 	DeleteFunc:  func(event.DeleteEvent) bool { return false },
@@ -231,16 +235,13 @@ func (r *reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 	}
 
 	// No schedule (none set, or excluded): stay awake, which restores the replicas if it was sleeping.
-	asleep, next := false, time.Time{}
-	if sched := scheduleFor(obj, r.kind, ns); sched != nil {
-		asleep, next, err = evaluate(sched, r.now())
-		if err != nil {
-			// The next annotation edit triggers a new reconcile.
-			log.Error(err, "Invalid schedule")
-			span.RecordError(err)
-			span.SetStatus(codes.Error, "invalid schedule")
-			return ctrl.Result{}, nil
-		}
+	asleep, next, err := desired(obj, r.kind, ns, r.now())
+	if err != nil {
+		// The next annotation edit triggers a new reconcile.
+		log.Error(err, "Invalid schedule")
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "invalid schedule")
+		return ctrl.Result{}, nil
 	}
 
 	span.SetAttributes(attribute.Bool("asleep", asleep), attribute.Bool("sleeping", sleeping))
