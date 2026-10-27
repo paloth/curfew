@@ -63,6 +63,7 @@ Runs in-cluster only, built on controller-runtime (`internal/curfew`), with lead
 - `curfew/skip-dates` (comma-separated `YYYY-MM-DD`, part of the schedule's annotations) skips sleep and wake times on those dates, read in the schedule's time zone (`evaluate`).
 - `curfew/awake-until` (RFC 3339) on a workload, else its namespace, keeps it awake until then (`desired` in `internal/curfew/schedule.go`, which Reconcile and waves both use).
 - `curfew/wave` (integer, default 0, negative allowed) orders workloads within a namespace: on sleep a workload waits until lower waves going to sleep have no pods (or running Jobs) left, on wake until higher waves waking up are ready; it polls every 10s and gives up after 10 min (`internal/curfew/wave.go`).
+- A sleeping workload found scaled up again is scaled back to 0 and counted (`scaledUpWhileAsleep` in `internal/curfew/conflict.go`); at 3 in one sleep window curfew logs that another controller is fighting it.
 - Namespaces starting with `kube-` are ignored (`scheduleFor`, `scheduled`).
 - Deployments, StatefulSets and extra kinds scale only through the `/scale` subresource (extra kinds through an unstructured body, `unstructuredScale`); CronJobs are suspended by patching `spec.suspend` (no subresource exists), counted as 1 replica running / 0 suspended (`current` in `internal/curfew/curfew.go`).
 - Original replica counts live in the `curfew-state` ConfigMap in the operator's namespace (`POD_NAMESPACE`), keyed `<kind>.<namespace>.<name>`.

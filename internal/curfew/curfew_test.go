@@ -198,6 +198,7 @@ func newTestReconciler(c client.Client, now *time.Time) *reconciler {
 		kinds:        builtinKinds,
 		now:          func() time.Time { return *now },
 		waitingSince: map[string]time.Time{},
+		scaledUp:     map[string]int{},
 	}
 }
 

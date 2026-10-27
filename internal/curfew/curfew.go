@@ -102,6 +102,7 @@ func Run() error {
 			kinds:        kinds,
 			now:          time.Now,
 			waitingSince: map[string]time.Time{},
+			scaledUp:     map[string]int{},
 			dryRun:       os.Getenv("DRY_RUN") == "true",
 		}
 		err := ctrl.NewControllerManagedBy(mgr).
@@ -235,6 +236,8 @@ type reconciler struct {
 	// waitingSince is when each workload started waiting for another wave; one reconcile runs at a time.
 	// shortcut: in memory, a leader change restarts the wave timeout; persist it in curfew-state if that matters.
 	waitingSince map[string]time.Time
+	// scaledUp counts, per sleeping workload, how often it was found scaled up again (in memory).
+	scaledUp map[string]int
 	// dryRun sends workload writes with dryRun=All: checked by the API server, never applied.
 	// curfew-state is still written, so wakes are decided and logged too.
 	dryRun bool
@@ -264,6 +267,7 @@ func (r *reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 	if err := r.client.Get(ctx, req.NamespacedName, obj); err != nil {
 		if apierrors.IsNotFound(err) && sleeping {
 			observeFreed(r.kind, req.Namespace, req.Name, nil, "")
+			delete(r.scaledUp, key)
 			delete(state.Data, key)
 			return ctrl.Result{}, r.saveState(ctx, state)
 		}
@@ -309,6 +313,9 @@ func (r *reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 
 	switch {
 	case asleep && current > 0:
+		if sleeping {
+			r.scaledUpWhileAsleep(log, req.Namespace, key)
+		}
 		// Save before scaling: a failed scale is retried, a failed save changes nothing.
 		state.Data[key] = strconv.Itoa(int(current))
 		if err := r.saveState(ctx, state); err != nil {
@@ -319,6 +326,7 @@ func (r *reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 			return ctrl.Result{}, err
 		}
 	case !asleep && sleeping:
+		delete(r.scaledUp, key)
 		replicas, err := strconv.ParseInt(stored, 10, 32)
 		if err == nil && replicas < 0 {
 			err = errors.New("negative replicas")
