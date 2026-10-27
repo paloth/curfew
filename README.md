@@ -162,6 +162,27 @@ extraKinds:
 - They are not counted in the `curfew_freed_*` metrics.
 - KEDA `ScaledObject`s are not supported this way: KEDA would scale the workload back up.
 
+### Other controllers
+
+curfew changes the replica count. Anything else that sets it puts the workload back up, curfew scales it down again, and the two loop all night. curfew notices: after 3 scale-ups in one sleep window it logs `another controller is likely fighting curfew`, and `curfew_scaled_up_while_asleep_total` counts every one.
+
+- **Argo CD with self-heal** resets `replicas` to the value in Git. Tell it to leave the field alone:
+  ```yaml
+  # Application
+  spec:
+    ignoreDifferences:
+      - group: apps
+        kind: Deployment
+        jsonPointers: [/spec/replicas]
+    syncPolicy:
+      syncOptions: [RespectIgnoreDifferences=true]
+  ```
+  Or leave `replicas` out of the manifest.
+- **KEDA** owns the replica count of the workloads it scales. Don't schedule those with curfew: pause them through KEDA instead, with the `autoscaling.keda.sh/paused-replicas: "0"` annotation on the `ScaledObject`.
+- **HorizontalPodAutoscaler** is fine: it does nothing while its target is at 0 replicas, and takes over again once curfew restores it.
+
+The count is kept in memory, so a restart of the operator starts it over. A scale that keeps failing and being retried counts too.
+
 ## Behavior
 
 - **Original replicas** are stored in the ConfigMap `curfew-state` in the operator's namespace, with one key per workload: `<kind>.<namespace>.<name>`. To see what is asleep:
@@ -171,7 +192,7 @@ extraKinds:
 - **Order of writes:** on sleep, the count is saved before scaling to 0. On wake, the workload is scaled up before its entry is removed. A failure in between is retried and never loses the original count.
 - **Removing the annotations** wakes the workload immediately if it was asleep.
 - **Deleting a sleeping workload** removes its entry.
-- **Scaling by hand during sleep:** if you scale a sleeping workload up, curfew saves the new count and scales it back to 0. Remove the annotations to keep it up.
+- **Scaling by hand during sleep:** if you scale a sleeping workload up, curfew saves the new count and scales it back to 0. Remove the annotations, or set [`curfew/awake-until`](#keep-awake), to keep it up. If this happens 3 times in one sleep window, curfew logs that another controller is likely fighting it (see [Other controllers](#other-controllers)).
 - **Already at 0 at sleep time:** nothing is stored, and the workload stays at 0 on wake.
 - **CronJobs** are suspended (`spec.suspend: true`) instead of scaled, so they start no new Jobs while asleep; Jobs already running are not stopped. A CronJob counts as 1 replica while it runs and 0 while suspended, so one you suspended yourself stays suspended after wake.
 - **Excluded namespaces:** workloads in namespaces starting with `kube-` are ignored, even when annotated, and so are those namespaces' own annotations.
@@ -232,6 +253,7 @@ Set `metrics.enabled=true` to serve Prometheus metrics on port 8080, behind the 
 |---|---|---|
 | `curfew_sleeping_workloads` | `namespace`, `kind` | Workloads asleep, from `curfew-state` |
 | `curfew_scale_total` | `kind`, `direction` (`sleep`/`wake`), `result` (`ok`/`error`) | Scale and suspend requests, dry-run ones included |
+| `curfew_scaled_up_while_asleep_total` | `namespace`, `kind` | Sleeping workloads found scaled up again and scaled back to 0 (see [Other controllers](#other-controllers)) |
 | `curfew_freed_cpu_cores` | `namespace`, `kind`, `name` | CPU requests a sleeping workload gives back: stored replicas × its pod's requests |
 | `curfew_freed_memory_bytes` | `namespace`, `kind`, `name` | Same, for memory |
 

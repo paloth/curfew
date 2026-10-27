@@ -22,6 +22,10 @@ var (
 		Name: "curfew_scale_total",
 		Help: "Scale and suspend requests, by direction (sleep or wake) and result (ok or error).",
 	}, []string{"kind", "direction", "result"})
+	scaledUpTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "curfew_scaled_up_while_asleep_total",
+		Help: "Sleeping workloads found scaled up again, by someone or another controller, and scaled back to 0.",
+	}, []string{"namespace", "kind"})
 	freedCPU = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "curfew_freed_cpu_cores",
 		Help: "CPU requests freed by a sleeping workload: stored replicas times its pod's requests.",
@@ -33,7 +37,7 @@ var (
 )
 
 func init() {
-	metrics.Registry.MustRegister(sleepingWorkloads, scaleTotal, freedCPU, freedMemory)
+	metrics.Registry.MustRegister(sleepingWorkloads, scaleTotal, scaledUpTotal, freedCPU, freedMemory)
 }
 
 // observeState counts the curfew-state entries (<kind>.<namespace>.<name>) per namespace and kind.
