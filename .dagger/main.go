@@ -238,10 +238,24 @@ func (m *CurfewCi) Check(
 	for i, s := range steps {
 		wg.Go(func() {
 			if err := s.run(); err != nil {
-				errs[i] = fmt.Errorf("%s: %w", s.name, err)
+				errs[i] = fmt.Errorf("%s: %w", s.name, withOutput(err))
 			}
 		})
 	}
 	wg.Wait()
 	return errors.Join(errs...)
+}
+
+// Add the end of a failed command's output to its error, so the error alone says what
+// failed (CI turns it into annotations); other errors are returned as they are.
+func withOutput(err error) error {
+	var e *dagger.ExecError
+	if !errors.As(err, &e) {
+		return err
+	}
+	lines := strings.Split(strings.TrimSpace(e.Stdout+"\n"+e.Stderr), "\n")
+	if len(lines) > 40 {
+		lines = lines[len(lines)-40:]
+	}
+	return fmt.Errorf("exit code %d:\n%s", e.ExitCode, strings.Join(lines, "\n"))
 }

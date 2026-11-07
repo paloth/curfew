@@ -1,7 +1,7 @@
 version: "2"
 
 run:
-  timeout: 5m
+  timeout: 10m # CI runs lint alongside the other checks on one 4-CPU runner
 
 linters:
   enable:

@@ -17,16 +17,23 @@ jobs:
   check:
     name: Check
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      # lint, test, vuln, helm, docs and the multi-arch build, in parallel: the same as `just check`
-      - name: Check in Dagger
+      # No call: the action only installs the CLI, so the next step can keep the log for annotations
+      - name: Install Dagger
         uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77 # v8.4.1
         with:
           version: v0.21.11
-          call: check --version=${{ github.sha }}
+      # lint, test, vuln, helm, docs and the multi-arch build, in parallel: the same as `just check`
+      - name: Check in Dagger
+        run: |
+          set -o pipefail
+          dagger --progress plain call check --version="$GITHUB_SHA" 2>&1 | tee "$RUNNER_TEMP/check.log" || {
+            .github/scripts/annotate-check.sh "$RUNNER_TEMP/check.log"
+            exit 1
+          }
 
   e2e:
     name: End-to-end
