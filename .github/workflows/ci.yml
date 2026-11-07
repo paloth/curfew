@@ -20,16 +20,24 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        call: [lint, test, vuln, helm, "build --version=${{ github.sha }}"]
-    name: ${{ matrix.call }}
+        include:
+          - { name: Lint, call: lint }
+          - { name: Test, call: test }
+          - { name: Vulnerabilities, call: vuln }
+          - { name: Helm chart, call: helm }
+          - { name: Build image, call: "build --version=${{ github.sha }}" }
+    name: ${{ matrix.name }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77 # v8.4.1
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: ${{ matrix.name }} in Dagger
+        uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77 # v8.4.1
         with:
           version: v0.21.11
           call: ${{ matrix.call }}
 
   e2e:
+    name: End-to-end
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: dagger
@@ -37,19 +45,23 @@ jobs:
       KUBE_CONTEXT: kind-curfew
       OPERATOR_NS: curfew
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310
         with:
           version: v4.3.1
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa
+      - name: Create the kind cluster
+        uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa
         with:
           cluster_name: curfew
-      - name: Build the image into the kind cluster
+      - name: Build the image in Dagger
         uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77 # v8.4.1
         with:
           version: v0.21.11
           call: image --version=e2e export-image --name=ghcr.io/paloth/curfew:e2e
-      - run: kind load docker-image ghcr.io/paloth/curfew:e2e --name curfew
+      - name: Load the image into kind
+        run: kind load docker-image ghcr.io/paloth/curfew:e2e --name curfew
       - name: Deploy curfew
         run: |
           kubectl --context "$KUBE_CONTEXT" create namespace "$OPERATOR_NS"
@@ -60,7 +72,7 @@ jobs:
             -f test/e2e-values.yaml --set image.tag=e2e --set image.pullPolicy=Never --set dev=true --wait --timeout 3m
       - name: Run the end-to-end test
         run: test/e2e.sh
-      - name: Operator logs
+      - name: Show operator logs
         if: failure()
         run: |
           kubectl --context "$KUBE_CONTEXT" -n "$OPERATOR_NS" describe pods
