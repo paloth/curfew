@@ -29,7 +29,7 @@ just ci                    # dagger call check: everything below, in parallel
 dagger call lint           # also: test, vuln, helm, build --version=X
 dagger call image --version=e2e export-image --name=ghcr.io/paloth/curfew:e2e   # load into local Docker
 ```
-`image` cross-compiles natively and copies onto distroless, mirroring the `Dockerfile` (keep base image digests in sync). The release push still uses `docker/build-push-action` for provenance and SBOM attestations.
+`image` cross-compiles natively and copies onto distroless, mirroring the `Dockerfile` and reading its two `FROM` images from it. The release push still uses `docker/build-push-action` for provenance and SBOM attestations.
 
 ### Documentation
 User docs live in `docs/` (MkDocs Material, `mkdocs.yml`), published to https://paloth.github.io/curfew/ by `.github/workflows/docs.yml` on push to `main`. The README is a short overview that links there; update the docs page with any behavior change.
