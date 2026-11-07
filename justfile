@@ -83,6 +83,10 @@ clean: helm-destroy
 # Run all checks (fmt, vet, lint, test, vuln)
 check: fmt vet lint test vuln
 
+# Run the CI pipeline (lint, test, vuln, helm, multi-arch build) in Dagger, as GitHub Actions does
+ci:
+    dagger call check
+
 # Scan dependencies for known vulnerabilities
 vuln:
     go run golang.org/x/vuln/cmd/govulncheck@latest ./...
