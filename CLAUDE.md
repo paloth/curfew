@@ -23,7 +23,7 @@ just check                 # dagger call check: lint, test, vuln, helm, docs, mu
 ```
 
 ### CI (Dagger)
-Build and check logic lives in a Dagger module (`.dagger/main.go`, Go SDK, engine pinned in `dagger.json`). GitHub Actions calls its functions directly (`ci.yml`, `docs.yml`); locally the justfile wraps them (`just test` → `dagger call test`). Recipes that edit files (`fmt`, `lint-fix`, `tidy`) or use the host's cluster and Docker (`helm-deploy`, `colima-*`, `e2e`, `jaeger-*`, `docs-serve`) stay plain shell.
+Build and check logic lives in a Dagger module (`.dagger/main.go`, Go SDK, engine pinned in `dagger.json`). GitHub Actions calls its functions directly: `ci.yml` runs `check` in one job (the same as `just check`), then the kind e2e, and `docs.yml` runs `docs`; locally the justfile wraps them (`just test` → `dagger call test`). Recipes that edit files (`fmt`, `lint-fix`, `tidy`) or use the host's cluster and Docker (`helm-deploy`, `colima-*`, `e2e`, `jaeger-*`, `docs-serve`) stay plain shell.
 - Functions: `lint`, `test`, `vuln`, `helm`, `docs`, `binary`, `image`, `build` (amd64 + arm64), `publish`, `check` (all in parallel). `dagger functions` lists them.
 - `binary`/`image` cross-compile natively and copy onto distroless, reading the two `FROM` images from the `Dockerfile` (Dependabot keeps them current); platform defaults to the engine's own.
 - The release push stays on `docker/build-push-action` for provenance and SBOM attestations; `publish` is for manual pushes.

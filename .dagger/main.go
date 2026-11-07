@@ -6,8 +6,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"dagger/curfew-ci/internal/dagger"
 
@@ -210,13 +212,36 @@ func (m *CurfewCi) Build(
 	return g.Wait()
 }
 
-// Run lint, test, vuln, helm, docs and the multi-platform build in parallel
-func (m *CurfewCi) Check(ctx context.Context) error {
-	g, ctx := errgroup.WithContext(ctx)
-	for _, f := range []func(context.Context) (string, error){m.Lint, m.Test, m.Vuln, m.Helm} {
-		g.Go(func() error { _, err := f(ctx); return err })
+// Run lint, test, vuln, helm, docs and the multi-platform build in parallel,
+// and report every step that failed, not only the first
+func (m *CurfewCi) Check(
+	ctx context.Context,
+	// +default="dev"
+	version string,
+) error {
+	out := func(f func(context.Context) (string, error)) func() error {
+		return func() error { _, err := f(ctx); return err }
 	}
-	g.Go(func() error { _, err := m.Docs().Sync(ctx); return err })
-	g.Go(func() error { return m.Build(ctx, "dev") })
-	return g.Wait()
+	steps := []struct {
+		name string
+		run  func() error
+	}{
+		{"lint", out(m.Lint)},
+		{"test", out(m.Test)},
+		{"vuln", out(m.Vuln)},
+		{"helm", out(m.Helm)},
+		{"docs", func() error { _, err := m.Docs().Sync(ctx); return err }},
+		{"build", func() error { return m.Build(ctx, version) }},
+	}
+	errs := make([]error, len(steps))
+	var wg sync.WaitGroup
+	for i, s := range steps {
+		wg.Go(func() {
+			if err := s.run(); err != nil {
+				errs[i] = fmt.Errorf("%s: %w", s.name, err)
+			}
+		})
+	}
+	wg.Wait()
+	return errors.Join(errs...)
 }
