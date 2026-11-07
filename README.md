@@ -33,10 +33,10 @@ See [Install](https://paloth.github.io/curfew/install/) for the chart's values, 
 
 ## Development
 
-Requirements: Go 1.27, [just](https://github.com/casey/just), Docker and Helm.
+Requirements: [just](https://github.com/casey/just), Docker, the [Dagger](https://docs.dagger.io/) CLI and Helm.
 
 ```bash
-just check   # fmt, vet, lint, test, vuln
+just check   # lint, test, vuln, helm, docs, multi-arch build, in Dagger like CI
 just e2e     # end-to-end test on a local Colima cluster
 just docs-serve   # this documentation, at http://127.0.0.1:8000
 ```

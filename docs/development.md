@@ -1,19 +1,24 @@
 # Development
 
-Requirements: Go 1.27, [just](https://github.com/casey/just), Docker and Helm. Python 3 for this documentation site.
+Requirements: [just](https://github.com/casey/just), Docker, the [Dagger](https://docs.dagger.io/) CLI, and Helm. Go 1.27 for `fmt` and `lint-fix`, Python 3 for `docs-serve`.
+
+Build and check recipes run in [Dagger](https://docs.dagger.io/) (`.dagger/main.go`), the same functions GitHub Actions calls, so a local run matches CI. Recipes that edit files or talk to your cluster run directly.
 
 ```bash
-just test            # go test -v ./...
-just test-race       # with the race detector
+just install-tools   # Dagger CLI at dagger.json's version, and golangci-lint v2 for lint-fix
+just test            # go vet, and the tests with the race detector
 just lint            # golangci-lint v2
 just vuln            # govulncheck: known vulnerabilities in dependencies
-just check           # fmt, vet, lint, test, vuln
-just install-tools   # install golangci-lint v2
-just docker-build    # build the image (VERSION=x.y.z to set the version)
+just helm-lint       # lint and render the chart
+just check           # fmt, then all of the above plus docs and the multi-arch build, in parallel
+just build           # binary into _bin/ (VERSION=x.y.z to set the version)
+just docker-build    # build the image and load it into Docker
 just docker-buildx   # multi-arch image (linux/amd64, linux/arm64)
 just helm-deploy     # create the labeled namespace, install or upgrade the chart
 just deploy          # uninstall, rebuild the image, reinstall
 ```
+
+Any function also runs on its own, with no `just`: `dagger functions` lists them, and `dagger call test` runs one.
 
 The namespace defaults to `curfew`. Set `OPERATOR_NS` to change it.
 

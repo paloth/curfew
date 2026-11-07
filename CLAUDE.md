@@ -16,26 +16,23 @@ go build -o curfew     # Build with specific output name
 
 ### Testing
 ```bash
-go test ./...              # Run all tests
-go test -v ./...           # Run tests with verbose output
+go test ./...              # Run all tests (fast, on the host)
 go test ./internal/curfew    # Test specific package
-just lint                  # golangci-lint v2 (install with `just install-tools`)
+just test                  # dagger call test: go vet + go test -race, as CI
+just check                 # dagger call check: lint, test, vuln, helm, docs, multi-arch build
 ```
 
 ### CI (Dagger)
-CI checks run in a Dagger module (`.dagger/main.go`, Go SDK, engine pinned in `dagger.json`); `.github/workflows/ci.yml` only calls its functions. Same commands locally (needs Docker):
-```bash
-just ci                    # dagger call check: everything below, in parallel
-dagger call lint           # also: test, vuln, helm, build --version=X
-dagger call image --version=e2e export-image --name=ghcr.io/paloth/curfew:e2e   # load into local Docker
-```
-`image` cross-compiles natively and copies onto distroless, mirroring the `Dockerfile` and reading its two `FROM` images from it. The release push still uses `docker/build-push-action` for provenance and SBOM attestations.
+Build and check logic lives in a Dagger module (`.dagger/main.go`, Go SDK, engine pinned in `dagger.json`). GitHub Actions calls its functions directly (`ci.yml`, `docs.yml`); locally the justfile wraps them (`just test` → `dagger call test`). Recipes that edit files (`fmt`, `lint-fix`, `tidy`) or use the host's cluster and Docker (`helm-deploy`, `colima-*`, `e2e`, `jaeger-*`, `docs-serve`) stay plain shell.
+- Functions: `lint`, `test`, `vuln`, `helm`, `docs`, `binary`, `image`, `build` (amd64 + arm64), `publish`, `check` (all in parallel). `dagger functions` lists them.
+- `binary`/`image` cross-compile natively and copy onto distroless, reading the two `FROM` images from the `Dockerfile` (Dependabot keeps them current); platform defaults to the engine's own.
+- The release push stays on `docker/build-push-action` for provenance and SBOM attestations; `publish` is for manual pushes.
 
 ### Documentation
 User docs live in `docs/` (MkDocs Material, `mkdocs.yml`), published to https://paloth.github.io/curfew/ by `.github/workflows/docs.yml` on push to `main`. The README is a short overview that links there; update the docs page with any behavior change.
 ```bash
 just docs-serve            # http://127.0.0.1:8000/curfew/, reloads on edits
-just docs-build            # strict build, fails on broken links
+just docs-build            # dagger call docs: strict build into site/, fails on broken links
 ```
 
 ### Dependencies
