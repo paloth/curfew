@@ -28,12 +28,15 @@ jobs:
           version: v0.21.11
       # lint, test, vuln, helm, docs and the multi-arch build, in parallel: the same as `just check`
       - name: Check in Dagger
+        # The report (stdout) goes to the job summary; on failure the log is turned into annotations too
         run: |
           set -o pipefail
-          dagger --progress plain call check --version="$GITHUB_SHA" 2>&1 | tee "$RUNNER_TEMP/check.log" || {
+          if { dagger --progress plain call check --version="$GITHUB_SHA" > "$RUNNER_TEMP/report.md"; } 2>&1 | tee "$RUNNER_TEMP/check.log"; then
+            tee -a "$GITHUB_STEP_SUMMARY" < "$RUNNER_TEMP/report.md"
+          else
             .github/scripts/annotate-check.sh "$RUNNER_TEMP/check.log"
             exit 1
-          }
+          fi
 
   e2e:
     name: End-to-end

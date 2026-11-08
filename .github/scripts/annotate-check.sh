@@ -3,15 +3,17 @@
 # Usage: annotate-check.sh <log>   (run from the repository root)
 set -euo pipefail
 
-# The CLI ends with "Error: <check's error>", which lists each failed step and its output.
+# The CLI ends with "Error: <check's report>": a Markdown report with a "### ❌ <step>" section per failed step.
 report=$(sed 's/\x1b\[[0-9;]*m//g' "$1" | sed -n '/^Error: /,$p' | sed '1s/^Error: //; s/ \[traceparent:[^]]*\]$//')
 [ -n "$report" ] || exit 0
 
 escape() { local s=${1//%/%25}; s=${s//$'\r'/%0D}; printf '%s' "${s//$'\n'/%0A}"; }
 
-# One annotation per failed step, e.g. "lint: exit code 1:"
-grep -E '^(lint|test|vuln|helm|docs|build): ' <<<"$report" | while IFS= read -r line; do
-  echo "::error title=Check: ${line%%:*} failed::$(escape "$line")"
+# One annotation per failed step, with the first line of its output
+grep -E '^### ❌ ' <<<"$report" | while IFS= read -r heading; do
+  step=${heading#\#\#\# ❌ }
+  first=$(sed -n "/^### ❌ $step\$/,/^### /{/^exit code/p}" <<<"$report" | head -n1)
+  echo "::error title=Check: $step failed::$(escape "$step: ${first:-failed}")"
 done || true
 
 # Line annotations for "file.go:line[:col]: message" from lint, vet, the compiler and tests
@@ -24,9 +26,4 @@ grep -oE '[A-Za-z0-9_./-]+\.go:[0-9]+(:[0-9]+)?: .+' <<<"$report" | sort -u | wh
   echo "::error file=$file,line=$line${col:+,col=$col}::$(escape "$msg")"
 done || true
 
-{
-  echo '### Check failed'
-  echo '```'
-  echo "$report"
-  echo '```'
-} >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+echo "$report" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"

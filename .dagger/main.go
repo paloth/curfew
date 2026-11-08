@@ -8,8 +8,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"dagger/curfew-ci/internal/dagger"
 
@@ -78,11 +80,11 @@ func (m *CurfewCi) Helm(ctx context.Context) (string, error) {
 	return dag.Container().From(helmImage).
 		WithMountedDirectory("/src", m.Src).
 		WithWorkdir("/src").
-		WithExec([]string{"helm", "lint", "helm/"}).
 		WithExec([]string{"helm", "template", "ci", "helm/"}).
 		WithExec([]string{"helm", "template", "ci", "helm/", "--set", "watchNamespaces={dev,staging}",
 			"--set", "tracing.endpoint=jaeger:4318", "--set", "tracing.insecure=true", "--set", "dev=true"}).
 		WithExec([]string{"helm", "template", "ci", "helm/", "--set", "networkPolicy.enabled=false"}).
+		WithExec([]string{"helm", "lint", "helm/"}). // last, so the output is the lint result, not rendered YAML
 		Stdout(ctx)
 }
 
@@ -212,50 +214,92 @@ func (m *CurfewCi) Build(
 	return g.Wait()
 }
 
-// Run lint, test, vuln, helm, docs and the multi-platform build in parallel,
-// and report every step that failed, not only the first
+// Run lint, test, vuln, helm, docs and the multi-platform build in parallel, and return
+// a Markdown report of every step: result, duration and the end of its output.
+// If a step fails, the error is that same report.
 func (m *CurfewCi) Check(
 	ctx context.Context,
 	// +default="dev"
 	version string,
-) error {
-	out := func(f func(context.Context) (string, error)) func() error {
-		return func() error { _, err := f(ctx); return err }
-	}
+) (string, error) {
 	steps := []struct {
 		name string
-		run  func() error
+		run  func(context.Context) (string, error)
 	}{
-		{"lint", out(m.Lint)},
-		{"test", out(m.Test)},
-		{"vuln", out(m.Vuln)},
-		{"helm", out(m.Helm)},
-		{"docs", func() error { _, err := m.Docs().Sync(ctx); return err }},
-		{"build", func() error { return m.Build(ctx, version) }},
+		{"lint", m.Lint},
+		{"test", m.Test},
+		{"vuln", m.Vuln},
+		{"helm", m.Helm},
+		{"docs", func(ctx context.Context) (string, error) {
+			pages, err := m.Docs().Glob(ctx, "**/*.html")
+			return fmt.Sprintf("%d pages built", len(pages)), err
+		}},
+		{"build", func(ctx context.Context) (string, error) {
+			return fmt.Sprintf("image built for %v, version %s", released, version), m.Build(ctx, version)
+		}},
 	}
-	errs := make([]error, len(steps))
+	type result struct {
+		out  string
+		err  error
+		took time.Duration
+	}
+	results := make([]result, len(steps))
 	var wg sync.WaitGroup
 	for i, s := range steps {
 		wg.Go(func() {
-			if err := s.run(); err != nil {
-				errs[i] = fmt.Errorf("%s: %w", s.name, withOutput(err))
-			}
+			start := time.Now()
+			out, err := s.run(ctx)
+			results[i] = result{out, err, time.Since(start).Round(time.Second)}
 		})
 	}
 	wg.Wait()
-	return errors.Join(errs...)
+
+	failed := slices.ContainsFunc(results, func(r result) bool { return r.err != nil })
+	var b strings.Builder
+	if failed {
+		b.WriteString("## ❌ Check failed\n\n")
+	} else {
+		b.WriteString("## ✅ Check passed\n\n")
+	}
+	b.WriteString("| Step | Result | Time |\n|---|---|---|\n")
+	for i, s := range steps {
+		fmt.Fprintf(&b, "| %s | %s | %s |\n", s.name, icon(results[i].err), results[i].took)
+	}
+	for i, s := range steps {
+		r := results[i]
+		body := r.out
+		if r.err != nil {
+			body = failure(r.err)
+		}
+		fmt.Fprintf(&b, "\n### %s %s\n\n```\n%s\n```\n", icon(r.err), s.name, tail(body, 40))
+	}
+	if failed {
+		return "", errors.New(b.String())
+	}
+	return b.String(), nil
 }
 
-// Add the end of a failed command's output to its error, so the error alone says what
-// failed (CI turns it into annotations); other errors are returned as they are.
-func withOutput(err error) error {
+func icon(err error) string {
+	if err != nil {
+		return "❌"
+	}
+	return "✅"
+}
+
+// A failed command's exit code and output; other errors as they are
+func failure(err error) string {
 	var e *dagger.ExecError
 	if !errors.As(err, &e) {
-		return err
+		return err.Error()
 	}
-	lines := strings.Split(strings.TrimSpace(e.Stdout+"\n"+e.Stderr), "\n")
-	if len(lines) > 40 {
-		lines = lines[len(lines)-40:]
+	return fmt.Sprintf("exit code %d:\n%s\n%s", e.ExitCode, e.Stdout, e.Stderr)
+}
+
+// The last n lines of s, without leading or trailing blank lines
+func tail(s string, n int) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
 	}
-	return fmt.Errorf("exit code %d:\n%s", e.ExitCode, strings.Join(lines, "\n"))
+	return strings.Join(lines, "\n")
 }

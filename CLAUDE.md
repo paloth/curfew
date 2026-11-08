@@ -26,7 +26,7 @@ just check                 # dagger call check: lint, test, vuln, helm, docs, mu
 Build and check logic lives in a Dagger module (`.dagger/main.go`, Go SDK, engine pinned in `dagger.json`). GitHub Actions calls its functions directly: `ci.yml` runs `check` in one job (the same as `just check`), then the kind e2e, and `docs.yml` runs `docs`; locally the justfile wraps them (`just test` → `dagger call test`). Recipes that edit files (`fmt`, `lint-fix`, `tidy`) or use the host's cluster and Docker (`helm-deploy`, `colima-*`, `e2e`, `jaeger-*`, `docs-serve`) stay plain shell.
 - Functions: `lint`, `test`, `vuln`, `helm`, `docs`, `binary`, `image`, `build` (amd64 + arm64), `publish`, `check` (all in parallel). `dagger functions` lists them.
 - `binary`/`image` cross-compile natively and copy onto distroless, reading the two `FROM` images from the `Dockerfile` (Dependabot keeps them current); platform defaults to the engine's own.
-- `check` lets every step finish and returns each failure with the end of its output; on failure CI's `.github/scripts/annotate-check.sh` turns that into annotations (per step, and per `file.go:line`) and a job summary.
+- `check` lets every step finish and returns a Markdown report (result, time and output tail per step); on failure the report is the error. CI writes it to the job summary, and on failure `.github/scripts/annotate-check.sh` also adds annotations (per failed step, and per `file.go:line`).
 - The release push stays on `docker/build-push-action` for provenance and SBOM attestations; `publish` is for manual pushes.
 
 ### Documentation
