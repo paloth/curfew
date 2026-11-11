@@ -71,7 +71,7 @@ clean: helm-destroy
     go clean -cache -testcache
     docker rmi -f $(docker images -f "reference={{registry}}/{{project_name}}" -q)
 
-# Format, then run everything CI runs (lint, test, vuln, helm, docs, multi-arch build) in parallel
+# Format, then run everything CI runs (lint, test, vuln, helm, docs in parallel, then the multi-arch build)
 check: fmt
     dagger call check
 

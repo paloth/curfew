@@ -26,7 +26,7 @@ jobs:
         uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77 # v8.4.1
         with:
           version: v0.21.11
-      # lint, test, vuln, helm, docs and the multi-arch build, in parallel: the same as `just check`
+      # lint, test, vuln, helm and docs in parallel, then the multi-arch build: the same as `just check`
       - name: Check in Dagger
         # The report (stdout) goes to the job summary; on failure the log is turned into annotations too
         run: |

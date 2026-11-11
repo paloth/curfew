@@ -214,9 +214,9 @@ func (m *CurfewCi) Build(
 	return g.Wait()
 }
 
-// Run lint, test, vuln, helm, docs and the multi-platform build in parallel, and return
-// a Markdown report of every step: result, duration and the end of its output.
-// If a step fails, the error is that same report.
+// Run lint, test, vuln, helm and docs in parallel, then the multi-platform build if they
+// all pass, and return a Markdown report of every step: result, duration and the end of
+// its output. If a step fails, the error is that same report.
 func (m *CurfewCi) Check(
 	ctx context.Context,
 	// +default="dev"
@@ -238,23 +238,26 @@ func (m *CurfewCi) Check(
 			return fmt.Sprintf("image built for %v, version %s", released, version), m.Build(ctx, version)
 		}},
 	}
-	type result struct {
-		out  string
-		err  error
-		took time.Duration
-	}
 	results := make([]result, len(steps))
+	run := func(i int) {
+		start := time.Now()
+		out, err := steps[i].run(ctx)
+		results[i] = result{out: out, err: err, took: time.Since(start).Round(time.Second)}
+	}
+	failedAt := func(r result) bool { return r.err != nil }
+	build := len(steps) - 1 // last, and only once the checks pass: no point building a broken commit
 	var wg sync.WaitGroup
-	for i, s := range steps {
-		wg.Go(func() {
-			start := time.Now()
-			out, err := s.run(ctx)
-			results[i] = result{out, err, time.Since(start).Round(time.Second)}
-		})
+	for i := range build {
+		wg.Go(func() { run(i) })
 	}
 	wg.Wait()
+	if slices.ContainsFunc(results[:build], failedAt) {
+		results[build] = result{out: "skipped: a check failed", skipped: true}
+	} else {
+		run(build)
+	}
 
-	failed := slices.ContainsFunc(results, func(r result) bool { return r.err != nil })
+	failed := slices.ContainsFunc(results, failedAt)
 	var b strings.Builder
 	if failed {
 		b.WriteString("## ❌ Check failed\n\n")
@@ -263,7 +266,7 @@ func (m *CurfewCi) Check(
 	}
 	b.WriteString("| Step | Result | Time |\n|---|---|---|\n")
 	for i, s := range steps {
-		fmt.Fprintf(&b, "| %s | %s | %s |\n", s.name, icon(results[i].err), results[i].took)
+		fmt.Fprintf(&b, "| %s | %s | %s |\n", s.name, results[i].icon(), results[i].took)
 	}
 	for i, s := range steps {
 		r := results[i]
@@ -271,7 +274,7 @@ func (m *CurfewCi) Check(
 		if r.err != nil {
 			body = failure(r.err)
 		}
-		fmt.Fprintf(&b, "\n### %s %s\n\n```\n%s\n```\n", icon(r.err), s.name, tail(body, 40))
+		fmt.Fprintf(&b, "\n### %s %s\n\n```\n%s\n```\n", r.icon(), s.name, tail(body, 40))
 	}
 	if failed {
 		return "", errors.New(b.String())
@@ -279,9 +282,20 @@ func (m *CurfewCi) Check(
 	return b.String(), nil
 }
 
-func icon(err error) string {
-	if err != nil {
+// One step of Check
+type result struct {
+	out     string
+	err     error
+	took    time.Duration
+	skipped bool
+}
+
+func (r result) icon() string {
+	switch {
+	case r.err != nil:
 		return "❌"
+	case r.skipped:
+		return "⏭️"
 	}
 	return "✅"
 }

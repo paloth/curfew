@@ -10,7 +10,7 @@ just test            # go vet, and the tests with the race detector
 just lint            # golangci-lint v2
 just vuln            # govulncheck: known vulnerabilities in dependencies
 just helm-lint       # lint and render the chart
-just check           # fmt, then all of the above plus docs and the multi-arch build, in parallel
+just check           # fmt, then all of the above plus docs in parallel, then the multi-arch build
 just build           # binary into _bin/ (VERSION=x.y.z to set the version)
 just docker-build    # build the image and load it into Docker
 just docker-buildx   # multi-arch image (linux/amd64, linux/arm64)
