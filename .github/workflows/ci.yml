@@ -26,17 +26,39 @@ jobs:
         uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77 # v8.4.1
         with:
           version: v0.21.11
-      # lint, test, vuln, helm and docs in parallel, then the multi-arch build: the same as `just check`
+      # lint, test, vuln, helm and docs in parallel: `just check` without the build, which the build job does
       - name: Check in Dagger
         # The report (stdout) goes to the job summary; on failure the log is turned into annotations too
         run: |
           set -o pipefail
-          if { dagger --progress plain call check --version="$GITHUB_SHA" > "$RUNNER_TEMP/report.md"; } 2>&1 | tee "$RUNNER_TEMP/check.log"; then
+          if { dagger --progress plain call check --version="$GITHUB_SHA" --build=false > "$RUNNER_TEMP/report.md"; } 2>&1 | tee "$RUNNER_TEMP/check.log"; then
             tee -a "$GITHUB_STEP_SUMMARY" < "$RUNNER_TEMP/report.md"
           else
             .github/scripts/annotate-check.sh "$RUNNER_TEMP/check.log"
             exit 1
           fi
+
+  # Each released platform on a runner of its own architecture, so nothing is cross-compiled or emulated
+  build:
+    name: Build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    needs: check
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-26.04
+          - arch: arm64
+            runner: ubuntu-26.04-arm
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Build the image in Dagger
+        uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77 # v8.4.1
+        with:
+          version: v0.21.11
+          call: image --version=${{ github.sha }} --platform=linux/${{ matrix.arch }} sync
 
   e2e:
     name: End-to-end

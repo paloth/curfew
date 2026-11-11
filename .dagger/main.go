@@ -214,18 +214,18 @@ func (m *CurfewCi) Build(
 	return g.Wait()
 }
 
-// Run lint, test, vuln, helm and docs in parallel, then the multi-platform build if they
-// all pass, and return a Markdown report of every step: result, duration and the end of
+// Run lint, test, vuln, helm and docs in parallel, then (unless build=false) the
+// multi-platform build if they all pass, and return a Markdown report of every step: result, duration and the end of
 // its output. If a step fails, the error is that same report.
 func (m *CurfewCi) Check(
 	ctx context.Context,
 	// +default="dev"
 	version string,
+	// Also build the images; CI passes false and builds each platform on its own runner
+	// +default=true
+	build bool,
 ) (string, error) {
-	steps := []struct {
-		name string
-		run  func(context.Context) (string, error)
-	}{
+	steps := []step{
 		{"lint", m.Lint},
 		{"test", m.Test},
 		{"vuln", m.Vuln},
@@ -234,9 +234,12 @@ func (m *CurfewCi) Check(
 			pages, err := m.Docs().Glob(ctx, "**/*.html")
 			return fmt.Sprintf("%d pages built", len(pages)), err
 		}},
-		{"build", func(ctx context.Context) (string, error) {
+	}
+	checks := len(steps)
+	if build {
+		steps = append(steps, step{"build", func(ctx context.Context) (string, error) {
 			return fmt.Sprintf("image built for %v, version %s", released, version), m.Build(ctx, version)
-		}},
+		}})
 	}
 	results := make([]result, len(steps))
 	run := func(i int) {
@@ -245,16 +248,17 @@ func (m *CurfewCi) Check(
 		results[i] = result{out: out, err: err, took: time.Since(start).Round(time.Second)}
 	}
 	failedAt := func(r result) bool { return r.err != nil }
-	build := len(steps) - 1 // last, and only once the checks pass: no point building a broken commit
 	var wg sync.WaitGroup
-	for i := range build {
+	for i := range checks {
 		wg.Go(func() { run(i) })
 	}
 	wg.Wait()
-	if slices.ContainsFunc(results[:build], failedAt) {
-		results[build] = result{out: "skipped: a check failed", skipped: true}
-	} else {
-		run(build)
+	if build { // last, and only once the checks pass: no point building a broken commit
+		if slices.ContainsFunc(results[:checks], failedAt) {
+			results[checks] = result{out: "skipped: a check failed", skipped: true}
+		} else {
+			run(checks)
+		}
 	}
 
 	failed := slices.ContainsFunc(results, failedAt)
@@ -282,7 +286,12 @@ func (m *CurfewCi) Check(
 	return b.String(), nil
 }
 
-// One step of Check
+// One step of Check, and what it produced
+type step struct {
+	name string
+	run  func(context.Context) (string, error)
+}
+
 type result struct {
 	out     string
 	err     error
