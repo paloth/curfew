@@ -23,7 +23,7 @@ import (
 // Tool images are pinned by digest like the Dockerfile's base images.
 // Refresh: docker buildx imagetools inspect <image:tag>, and copy the top "Digest:".
 const (
-	goImage     = "golang:1.27@sha256:e519d3b0a5b285e5aa53ab9eef02bc6bbb9cb04608389b743a136a9ce75f0d1e" // glibc, for -race
+	goImage     = "golang:1.27.4@sha256:08bcb99a38f85a265f9a93d1d3323e2440eec333380f3ea26ee0dec9264bb41c" // glibc, for -race
 	lintImage   = "golangci/golangci-lint:v2.15.0@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481"
 	helmImage   = "alpine/helm:4.3.1@sha256:e3f8d5c462d75470fbb1fce79ad5c20063657096d1f98c0fcea869e2600e2e5e"
 	govulnVer   = "v1.9.0"
