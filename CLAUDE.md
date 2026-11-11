@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Curfew is a Kubernetes operator that scales workloads (Deployments and StatefulSets) to zero, and suspends CronJobs, based on cron schedule annotations. The project uses Go, Cobra for the CLI, and controller-runtime.
+Curfew is a Kubernetes operator that scales workloads (Deployments, StatefulSets, and extra kinds with a `/scale` subresource) to zero, and suspends CronJobs, based on cron schedule annotations. The project uses Go, Cobra for the CLI, and controller-runtime.
 
 ## Development Commands
 
@@ -16,10 +16,24 @@ go build -o curfew     # Build with specific output name
 
 ### Testing
 ```bash
-go test ./...              # Run all tests
-go test -v ./...           # Run tests with verbose output
+go test ./...              # Run all tests (fast, on the host)
 go test ./internal/curfew    # Test specific package
-just lint                  # golangci-lint v2 (install with `just install-tools`)
+just test                  # dagger call test: go vet + go test -race, as CI
+just check                 # dagger call check: lint, test, vuln, helm, docs, multi-arch build
+```
+
+### CI (Dagger)
+Build and check logic lives in a Dagger module (`.dagger/main.go`, Go SDK, engine pinned in `dagger.json`). GitHub Actions calls its functions directly: `ci.yml` runs `check --build=false` in one job, then builds the image per platform on its own runner (amd64 on `ubuntu-26.04`, arm64 on `ubuntu-26.04-arm`), then the kind e2e on each of those images, on the same runners, and `docs.yml` runs `docs`; locally the justfile wraps them (`just test` → `dagger call test`). Recipes that edit files (`fmt`, `lint-fix`, `tidy`) or use the host's cluster and Docker (`helm-deploy`, `colima-*`, `e2e`, `jaeger-*`, `docs-serve`) stay plain shell.
+- Functions: `lint`, `test`, `vuln`, `helm`, `docs`, `binary`, `image`, `build` (amd64 + arm64), `publish`, `check` (the checks in parallel, then `build` if they pass; `--build=false` skips it). `dagger functions` lists them.
+- `binary`/`image` cross-compile natively and copy onto distroless, reading the two `FROM` images from the `Dockerfile` (Dependabot keeps them current); platform defaults to the engine's own.
+- `check` lets every step finish and returns a Markdown report (result, time and output tail per step); on failure the report is the error. CI writes it to the job summary, and on failure `.github/scripts/annotate-check.sh` also adds annotations (per failed step, and per `file.go:line`).
+- The release push stays on `docker/build-push-action` for provenance and SBOM attestations; `publish` is for manual pushes.
+
+### Documentation
+User docs live in `docs/` (MkDocs Material, `mkdocs.yml`), published to https://paloth.github.io/curfew/ by `.github/workflows/docs.yml` on push to `main`. The README is a short overview that links there; update the docs page with any behavior change.
+```bash
+just docs-serve            # http://127.0.0.1:8000/curfew/, reloads on edits
+just docs-build            # dagger call docs: strict build into site/, fails on broken links
 ```
 
 ### Dependencies
@@ -50,6 +64,7 @@ No config file. The operator reads:
 - `OTEL_EXPORTER_OTLP_INSECURE=true` env (optional): plain HTTP for traces instead of TLS (Helm value `tracing.insecure`)
 - `METRICS_ADDR` env (optional, e.g. `:8080`): Prometheus metrics, off when unset (Helm value `metrics.enabled`); curfew's own metrics are in `internal/curfew/metrics.go`
 - `DRY_RUN=true` env (optional): workload writes are sent with dryRun=All, curfew-state is still written, waves don't wait (Helm value `dryRun`)
+- `EXTRA_KINDS` env (optional, comma-separated `Kind.version.group`): more kinds with a `/scale` subresource, handled as unstructured objects (Helm value `extraKinds`, which also adds their RBAC rules; `extraKinds` in `internal/curfew/curfew.go`)
 - `WATCH_NAMESPACES` env (optional, comma-separated): only watch these namespaces (Helm value `watchNamespaces`, which also swaps the ClusterRoleBinding for per-namespace RoleBindings)
 
 ### Operator
@@ -62,8 +77,9 @@ Runs in-cluster only, built on controller-runtime (`internal/curfew`), with lead
 - `curfew/skip-dates` (comma-separated `YYYY-MM-DD`, part of the schedule's annotations) skips sleep and wake times on those dates, read in the schedule's time zone (`evaluate`).
 - `curfew/awake-until` (RFC 3339) on a workload, else its namespace, keeps it awake until then (`desired` in `internal/curfew/schedule.go`, which Reconcile and waves both use).
 - `curfew/wave` (integer, default 0, negative allowed) orders workloads within a namespace: on sleep a workload waits until lower waves going to sleep have no pods (or running Jobs) left, on wake until higher waves waking up are ready; it polls every 10s and gives up after 10 min (`internal/curfew/wave.go`).
+- A sleeping workload found scaled up again is scaled back to 0 and counted (`scaledUpWhileAsleep` in `internal/curfew/conflict.go`); at 3 in one sleep window curfew logs that another controller is fighting it.
 - Namespaces starting with `kube-` are ignored (`scheduleFor`, `scheduled`).
-- Deployments and StatefulSets scale only through the `/scale` subresource; CronJobs are suspended by patching `spec.suspend` (no subresource exists), counted as 1 replica running / 0 suspended (`current` in `internal/curfew/curfew.go`).
+- Deployments, StatefulSets and extra kinds scale only through the `/scale` subresource (extra kinds through an unstructured body, `unstructuredScale`); CronJobs are suspended by patching `spec.suspend` (no subresource exists), counted as 1 replica running / 0 suspended (`current` in `internal/curfew/curfew.go`).
 - Original replica counts live in the `curfew-state` ConfigMap in the operator's namespace (`POD_NAMESPACE`), keyed `<kind>.<namespace>.<name>`.
 - Each reconcile requeues itself at the next sleep or wake time; removing the annotations wakes the workload.
 - Health probes: `:9090/healthz` and `/readyz`.

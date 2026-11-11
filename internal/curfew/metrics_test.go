@@ -66,3 +66,49 @@ func TestReconcileMetrics(t *testing.T) {
 		t.Errorf("freed series = %d after wake, want 0", n)
 	}
 }
+
+func TestReconcileCountsScaleUpsWhileAsleep(t *testing.T) {
+	logs.InitLogger(false)
+	ctx := context.Background()
+
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "shop", Annotations: schedule},
+		Spec:       appsv1.DeploymentSpec{Replicas: ptr.To(int32(3))},
+	}
+	c := fake.NewClientBuilder().WithObjects(deploy).Build()
+	now := paris(t, "2026-10-19 22:00")
+	r := newTestReconciler(c, &now)
+	counted := func() float64 { return testutil.ToFloat64(scaledUpTotal.WithLabelValues("shop", "deployment")) }
+	before := counted()
+
+	reconcile := func() {
+		t.Helper()
+		if _, err := r.Reconcile(ctx, req); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reconcile() // goes to sleep: not a fight
+	for range fightWarning {
+		// Something like Argo CD self-heal puts the replicas back.
+		if err := c.Get(ctx, req.NamespacedName, deploy); err != nil {
+			t.Fatal(err)
+		}
+		deploy.Spec.Replicas = ptr.To(int32(3))
+		if err := c.Update(ctx, deploy); err != nil {
+			t.Fatal(err)
+		}
+		reconcile()
+	}
+	if got := counted() - before; got != fightWarning {
+		t.Errorf("counted %v scale-ups, want %d", got, fightWarning)
+	}
+	if got := r.scaledUp["deployment.shop.app"]; got != fightWarning {
+		t.Errorf("scaledUp = %d, want %d", got, fightWarning)
+	}
+
+	now = paris(t, "2026-10-20 08:00")
+	reconcile()
+	if len(r.scaledUp) != 0 {
+		t.Errorf("scaledUp = %v after wake, want empty", r.scaledUp)
+	}
+}

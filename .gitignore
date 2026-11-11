@@ -34,3 +34,7 @@ go.work.sum
 # Build output
 _bin/
 
+
+# Documentation site (just docs-serve / docs-build)
+.venv-docs/
+site/

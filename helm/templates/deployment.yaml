@@ -51,6 +51,14 @@ spec:
             - name: JAEGER_ENDPOINT
               value: {{ . | quote }}
             {{- end }}
+            {{- with .Values.extraKinds }}
+            - name: EXTRA_KINDS
+              {{- $kinds := list }}
+              {{- range . }}
+              {{- $kinds = append $kinds (printf "%s.%s.%s" .kind .version .group) }}
+              {{- end }}
+              value: {{ join "," $kinds | quote }}
+            {{- end }}
             {{- if .Values.metrics.enabled }}
             - name: METRICS_ADDR
               value: ":8080"

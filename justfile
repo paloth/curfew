@@ -21,27 +21,22 @@ alias hds := helm-destroy
 default:
     @just --list
 
-# Build a Linux binary for this machine's architecture (the Docker image builds its own)
+# Build and check targets run in Dagger (.dagger/main.go), the same functions CI calls.
+# Recipes that edit files or talk to your cluster run directly on this machine.
+
+# Build a Linux binary for this machine's architecture into _bin/ (VERSION=x.y.z to set the version)
 build:
-    GOOS=linux go build -o {{local_bin}} .
+    dagger call binary --version={{version}} export --path={{local_bin}}
 
-# Build with version information
-build-versioned version="dev":
-    go build -ldflags "-X curfew/cmd.Version={{version}}" -o {{local_bin}} .
-
-# Run all tests
+# Run go vet and the tests with the race detector
 test:
-    go test -v ./...
+    dagger call test
 
 # Run tests with coverage
 test-coverage:
     go test -v -coverprofile=coverage.out ./...
     go tool cover -html=coverage.out -o coverage.html
     @echo "Coverage report generated: coverage.html"
-
-# Run tests with race detection
-test-race:
-    go test -v -race ./...
 
 # Run a specific test
 test-one pkg test:
@@ -52,17 +47,13 @@ fmt:
     go fmt ./...
     gofmt -s -w .
 
-# Run linter
+# Run golangci-lint
 lint:
-    golangci-lint run
+    dagger call lint
 
 # Fix linting issues where possible
 lint-fix:
     golangci-lint run --fix
-
-# Vet code
-vet:
-    go vet ./...
 
 # Tidy dependencies
 tidy:
@@ -80,32 +71,29 @@ clean: helm-destroy
     go clean -cache -testcache
     docker rmi -f $(docker images -f "reference={{registry}}/{{project_name}}" -q)
 
-# Run all checks (fmt, vet, lint, test, vuln)
-check: fmt vet lint test vuln
+# Format, then run everything CI runs (lint, test, vuln, helm, docs in parallel, then the multi-arch build)
+check: fmt
+    dagger call check
 
 # Scan dependencies for known vulnerabilities
 vuln:
-    go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+    dagger call vuln
 
-# Build Docker image
+# Lint and render the Helm chart
+helm-lint:
+    dagger call helm
+
+# Build the image for this machine's architecture and load it into Docker as {{image_tag}}
 docker-build:
-    docker build --build-arg VERSION={{version}} -t {{image_tag}} .
+    dagger call image --version={{version}} export-image --name={{image_tag}}
 
-# Build Docker image with BuildKit
-docker-build-buildkit:
-    DOCKER_BUILDKIT=1 docker build --build-arg VERSION={{version}} -t {{image_tag}} .
-
-# Build multi-arch Docker image
+# Build the image for linux/amd64 and linux/arm64 (nothing is loaded or pushed)
 docker-buildx:
-    docker buildx build --platform linux/amd64,linux/arm64 --build-arg VERSION={{version}} -t {{image_tag}} .
+    dagger call build --version={{version}}
 
-# Push Docker image to registry
-docker-push: docker-build
-    docker push {{image_tag}}
-
-# Build and push Docker image
-docker-release: docker-build docker-push
-    @echo "Released {{image_tag}}"
+# Push the multi-arch image as {{image_tag}}, with your local registry login (docker login)
+docker-push:
+    dagger call publish --version={{version}} --address={{image_tag}}
 
 # Run Docker container locally
 docker-run:
@@ -129,29 +117,20 @@ helm-destroy:
 deploy *helm_args: helm-destroy docker-build (helm-deploy helm_args)
     @echo "Deployed {{project_name}} {{image_tag}} to Kubernetes"
 
-# Complete release process with tests
+# Run every check, then push the multi-arch image at this version (CI's release workflow is the usual way)
 release version:
-    @echo "Running tests..."
-    just test
-    @echo "Building version {{version}}..."
-    VERSION={{version}} just build-versioned {{version}}
-    @echo "Building and pushing Docker image..."
+    dagger call check
     VERSION={{version}} just docker-push
-    @echo "Release {{version}} complete!"
-
-# Development workflow - run checks before commit
-pre-commit: fmt vet lint test
-    @echo "Pre-commit checks passed ✓"
 
 # Generate mocks (for when you add interfaces)
 generate:
     go generate ./...
 
-# Install development tools
+# Install development tools: the Dagger CLI at dagger.json's engine version, and golangci-lint for lint-fix
 install-tools:
-    @echo "Installing golangci-lint..."
+    curl -fsSL https://dl.dagger.io/dagger/install.sh | \
+        DAGGER_VERSION=$(sed -n 's/.*"engineVersion": "v\(.*\)".*/\1/p' dagger.json) BIN_DIR=$HOME/.local/bin sh
     go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
-    @echo "Installing tools complete!"
 
 # Show dependency tree
 deps-tree:
@@ -190,8 +169,9 @@ colima-up:
 colima-deploy:
     DOCKER_CONTEXT=colima VERSION=e2e just docker-build
     just _namespace --context {{kube_context}}
+    kubectl --context {{kube_context}} apply -f test/widget-crd.yaml
     helm upgrade --install {{project_name}} helm/ --kube-context {{kube_context}} -n {{operator_ns}} \
-        --set image.tag=e2e --set image.pullPolicy=Never --set dev=true --wait --timeout 2m
+        -f test/e2e-values.yaml --set image.tag=e2e --set image.pullPolicy=Never --set dev=true --wait --timeout 2m
     # Same tag on every build: restart so the pod runs the image just built
     kubectl --context {{kube_context}} -n {{operator_ns}} rollout restart deployment/{{project_name}}
     kubectl --context {{kube_context}} -n {{operator_ns}} rollout status deployment/{{project_name}} --timeout 2m
@@ -207,3 +187,14 @@ colima-undeploy:
 # Deploy to Colima and run the end-to-end test (about 5 minutes)
 e2e: colima-deploy
     KUBE_CONTEXT={{kube_context}} OPERATOR_NS={{operator_ns}} test/e2e.sh
+
+# Serve the documentation site at http://127.0.0.1:8000, reloading on edits (needs Python 3)
+docs-serve: _docs-venv
+    .venv-docs/bin/mkdocs serve
+
+# Build the documentation site into site/, failing on broken links
+docs-build:
+    dagger call docs export --path=site
+
+_docs-venv:
+    test -x .venv-docs/bin/mkdocs || (python3 -m venv .venv-docs && .venv-docs/bin/pip install -q -r docs/requirements.txt)

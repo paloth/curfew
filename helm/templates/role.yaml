@@ -13,6 +13,14 @@ rules:
   - apiGroups: ["batch"]
     resources: ["cronjobs"]
     verbs: ["get", "list", "watch", "patch"]
+  {{- range .Values.extraKinds }}
+  - apiGroups: [{{ .group | quote }}]
+    resources: [{{ .resource | quote }}]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [{{ .group | quote }}]
+    resources: [{{ printf "%s/scale" .resource | quote }}]
+    verbs: ["get", "update", "patch"]
+  {{- end }}
   # Waves wait for the pods of an earlier wave to be gone.
   - apiGroups: [""]
     resources: ["pods"]

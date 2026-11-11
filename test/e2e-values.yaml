@@ -1,0 +1,5 @@
+extraKinds:
+  - group: e2e.curfew.test
+    version: v1
+    kind: Widget
+    resource: widgets
