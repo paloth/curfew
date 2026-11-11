@@ -58,13 +58,32 @@ jobs:
         uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77 # v8.4.1
         with:
           version: v0.21.11
-          call: image --version=${{ github.sha }} --platform=linux/${{ matrix.arch }} sync
+          call: image --version=${{ github.sha }} --platform=linux/${{ matrix.arch }} export-image --name=ghcr.io/paloth/curfew:e2e
+      # docker save keeps the image name, which kind needs to find it
+      - name: Save the image
+        run: docker save ghcr.io/paloth/curfew:e2e -o "$RUNNER_TEMP/curfew.tar"
+      - name: Upload the image for the end-to-end test
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: image-${{ matrix.arch }}
+          path: ${{ runner.temp }}/curfew.tar
+          retention-days: 1
+          if-no-files-found: error
 
+  # Each platform's image from the build job, on a kind cluster of the same architecture
   e2e:
-    name: End-to-end
-    runs-on: ubuntu-latest
+    name: End-to-end (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
-    needs: check
+    needs: build
+    strategy:
+      fail-fast: false # a failure on one architecture says nothing about the other
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-26.04
+          - arch: arm64
+            runner: ubuntu-26.04-arm
     env:
       KUBE_CONTEXT: kind-curfew
       OPERATOR_NS: curfew
@@ -79,13 +98,13 @@ jobs:
         uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa
         with:
           cluster_name: curfew
-      - name: Build the image in Dagger
-        uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77 # v8.4.1
+      - name: Download the built image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          version: v0.21.11
-          call: image --version=e2e export-image --name=ghcr.io/paloth/curfew:e2e
+          name: image-${{ matrix.arch }}
+          path: ${{ runner.temp }}
       - name: Load the image into kind
-        run: kind load docker-image ghcr.io/paloth/curfew:e2e --name curfew
+        run: kind load image-archive "$RUNNER_TEMP/curfew.tar" --name curfew
       - name: Deploy curfew
         run: |
           kubectl --context "$KUBE_CONTEXT" create namespace "$OPERATOR_NS"

@@ -41,7 +41,7 @@ just colima-undeploy   # uninstall (the curfew-state ConfigMap is kept)
 - a namespace schedule applies, with StatefulSets excluded,
 - a `Widget` custom resource (`test/widget-crd.yaml`, enabled through `test/e2e-values.yaml`) sleeps and wakes through `/scale`.
 
-`KUBE_CONTEXT` (default `colima`) selects another cluster. CI runs the same test on kind.
+`KUBE_CONTEXT` (default `colima`) selects another cluster. CI runs the same test on kind, on amd64 and arm64, with the images its build jobs made.
 
 ## Documentation
 
